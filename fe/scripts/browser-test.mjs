@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { build } from 'vite';
+import { readDurable } from './durable-test-utils.mjs';
 
 const bodyA = 'JWT 문서에서 토큰 검증 방법과 Spring Security 인증 처리 절차를 설명합니다. 안전한 공개 기술 문서의 의미 있는 본문입니다.';
 const bodyB = '우주 탐사선은 먼 행성의 대기와 암석을 연구합니다. 천문학자들이 수집한 관측 자료로 태양계 형성 과정을 분석하는 과학 기사입니다.';
@@ -93,6 +94,10 @@ try {
     const url = new URL(route.request().url());
     const google = url.hostname === 'www.google.com';
     const parameter = google ? 'q' : 'query';
+    if (!google && url.searchParams.get(parameter) === 'OBSERVED_NAVER_LAYOUT') {
+      await route.fulfill({ contentType: 'text/html; charset=utf-8', body: await readFile(resolve('tests/fixtures/naver-20261019.html'), 'utf8') });
+      return;
+    }
     const empty = url.searchParams.get(parameter) === 'NO_RESULTS';
     const card = google
       ? '<div class="MjjYud"><a href="https://example.com/docs"><h3>인증</h3></a></div>'
@@ -283,6 +288,17 @@ try {
   assert.equal(result.candidates.at(-1).reason, 'unavailable-content', 'zero search results exhaust bounded wait');
   assert.deepEqual(result.visits.map(v => [v.visitId, v.content]), preserved, 'empty search preserves valid visits');
   assert.deepEqual(result.readyVisits.slice(0, searchReady.length), searchReady, 'exclusions do not renumber published visits');
+  // #60 remains a collection failure. This asserts safe exclusion, not service support.
+  const beforeUnsupported = result.candidates.at(-1).visitId;
+  await page.goto('https://search.naver.com/search.naver?query=OBSERVED_NAVER_LAYOUT');
+  await page.bringToFront();
+  await new Promise(resolve => setTimeout(resolve, 8500));
+  result = await until(state => state.candidates.at(-1)?.visitId !== beforeUnsupported && state.candidates.at(-1)?.reason === 'unavailable-content', 'unsupported observed Naver structure safely times out');
+  assert.deepEqual(result.visits.map(v => [v.visitId, v.content]), preserved);
+  const unsupported = (await readDurable(popup, 'collection')).candidates.at(-1);
+  assert.equal(unsupported.state, 'excluded');
+  assert.equal(unsupported.snapshot, undefined, 'unsupported structure keeps no sampled payload in IndexedDB');
+  console.log('PASS: synthetic observed Naver layout safely excluded with no new visit/IDB snapshot; collection support still FAIL (#60)');
   await popup.evaluate(() => chrome.runtime.sendMessage({ type: 'stop' }));
   const stopped = await status();
   await until(state => state.visitDelivery.visits.length === stopped.readyVisits.length && state.visitDelivery.visits.every(visit => visit.phase === 'acked'), 'all finalized visits receive validated server ACK');

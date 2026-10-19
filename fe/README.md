@@ -1,5 +1,7 @@
 # Focus Recovery Chrome Extension (Issue #51 포함)
 
+Issue #59의 [실제 검색·사이트 권한 E2E 검증](../docs/real-search-permission-e2e-validation.md): Google은 접근 제한으로 BLOCKED, Naver 일반 결과 수집은 FAIL([#60](https://github.com/SKHU-AI-Projects-Archive/2026-2-Capstone-T01-focus-recovery/issues/60))입니다. Chrome 승인 dialog는 확인했지만 허용·거부·재허용 전체 검증은 미완료입니다. 합성 회귀 성공을 실제 서비스 지원으로 해석하지 마세요.
+
 Manifest V3 개발용 수집기입니다. 서버 작업 세션 → 확정 방문 POST → POST ACK 이후 누적 행동 PATCH → 최종 ACK 이후 서버 종료와 END_PENDING 영속 복구를 연동합니다.
 
 본문은 최대 **5,000 Unicode code points**까지 추출하고, IndexedDB 큐·전송·저장에서는 추출 원본을 유지합니다. Issue #56에서 BE 검증도 동일 기준으로 통일했습니다. [Unicode 계약 수정·회귀 검증](../docs/unicode-content-length-validation.md)에 원인·경계값·실제 Chrome → BE → MySQL 결과를 기록합니다. DB 스키마 변경은 없습니다.
