@@ -1,6 +1,90 @@
 # 실제 검색·Chrome 사이트 권한 E2E 검증 — Issue #59
 
-검증일: 2026-10-19 (Asia/Seoul). [Issue #59](https://github.com/SKHU-AI-Projects-Archive/2026-2-Capstone-T01-focus-recovery/issues/59)의 전체 본문을 기준으로 한다. **파일럿 시작 불가: Google 정상 검색은 BLOCKED, 실제 Naver 결과 수집은 FAIL(#60), 사용자 권한 허용·거부·재허용 전체 검증은 BLOCKED다.** 아래 PASS는 명시한 환경과 검증 수준에만 적용한다. 합성 fixture, 모의 Chrome API, manifest 사전 권한은 실제 서비스·수동 승인 성공을 대체하지 않는다.
+검증일: 2026-10-19 (Asia/Seoul). [Issue #59](https://github.com/SKHU-AI-Projects-Archive/2026-2-Capstone-T01-focus-recovery/issues/59)의 전체 본문을 기준으로 한다. **최신 판정은 아래 후속 검증을 따른다. 파일럿 보류: Google BLOCKED, 권한 재허용 후 동일 세션의 방문 전송 FAIL.** 합성 fixture, 모의 Chrome API, manifest 사전 권한은 실제 서비스·수동 승인 성공을 대체하지 않는다. 최초 검증 기록은 실패와 환경 격리 실수를 포함해 뒤에 보존한다.
+
+## #62 병합 후 #59 후속 검증
+
+### 기준 및 변경 범위
+
+- 공식 main `cc01ff483ab16546c9b127296c3ad0bfb301bc8d`에서 PR #62 병합을 확인했다. #61은 OPEN / Draft였다. 기존 #59 브랜치에 공식 main을 merge하여 기존 작업과 이력을 보존했다. 다른 worktree·Fork main·공식 main은 변경하지 않았다.
+- #60의 제품 수정·fixture·기본 활성화된 25개 검색 회귀는 main에서 가져왔다. #59에서 별도의 제품 수정은 하지 않았다. 이전 `RUN_KNOWN_SEARCH_BUG` 조건은 제거됐으며, 원래 2개 실패 사례도 기본 실행에서 PASS한다.
+- #59 브라우저의 옛 Naver 안전 제외 기대를 **같은 최소 fixture의 정상 추출·organicResultCount=1·기존 방문 보존**으로 갱신했다. main의 빈 결과 제외 검사는 별도로 유지한다.
+- 새 권한 결함의 재현 테스트 1개를 `tests/durable-background.test.ts`에 추가했다. 현재 제품에서 **기대 sequence=2 / 실제=1로 실패**한다. SKIP·환경 변수·expected-failure로 숨기지 않았으며 기본 `npm test`가 exit 1임을 명시한다. 이 Draft PR은 바로 병합 가능한 상태가 아니다.
+
+### 실제 Naver 재검증과 합성 회귀의 구분
+
+[#60 보고서](naver-search-dom-fix-validation.md)의 수정 후 실제 Chrome → 실제 Spring Boot → 별도 MySQL 실행 결과를 참조한다. 이 후속 단계에서 실서비스 검색 요청을 반복하지 않았다.
+
+| #59 Naver 체크 항목 | 최신 판정 | 근거·범위 |
+| --- | --- | --- |
+| 검색어·제목·설명·정규화 URL 보존 | PASS (#60 실서비스 실행) | 영어/한국어 2방문, SQL 필드 길이·해시·visitId/sequence 대조 |
+| 검색어 변경·연속 문서 이동 | PASS (관측 2검색) | 영어→한국어, 서로 다른 UUID와 sequence 1,2, 재전송 200 |
+| 실제 빈 결과의 안전 제외 | PASS (관측 샘플) | 희소 공개 검증어에서 유효 방문·DB 증가 없음 |
+| 블로그·뉴스·외부 결과 클릭 이동 | SKIP | 해당 이동의 종단 저장은 아직 실행하지 않음 |
+| 실제 SPA·증분 로딩·A/B 구조 변화 | SKIP | #60은 두 전체 문서 이동을 검증. 합성 MutationObserver 검사를 실제 SPA 성공으로 대체하지 않음 |
+| 광고가 실제 표시된 표본의 오수집 여부 | SKIP | #60 실서비스 표본에 명확한 광고가 없었음. 광고·AI·추천 경계의 합성 검사는 PASS |
+| Google 체크리스트 전체 | BLOCKED (최초 실제 관측 유지) | 비정상 트래픽/reCAPTCHA로 정상 DOM 접근 불가. 재요청·우회 없음 |
+
+### 실제 Chrome 권한 → BE → DB
+
+새 프로필 2개와 **수집 사이트 사전 권한을 추가하지 않은** 임시 빌드를 사용했다. API의 localhost 필수 권한만 있으며 사이트 권한은 실제 toolbar popup과 Chrome 설정 UI로 변경했다. Chrome API로 허용/철회를 모의하지 않았다. 문서는 개인정보 없는 로컬 합성이므로 실서비스 DOM 성공과 구분한다. Chrome for Testing/OS 버전은 최초 환경과 같다.
+
+새 전용 MySQL `focus-recovery-issue59-followup-20261019-d9ba` (생성 ID `8b00b74070bf…`, issue=59 label), DB 포트 `63536`, 별도 고정 JAR의 BE PID `87803`을 사용했다. `server.port=0`으로 할당된 API `63581`의 기동 로그/datasource를 확인하고 첫 생성 세션이 **이번 DB에 존재함**을 검사한 뒤 진행했다. 최초 실행의 포트 충돌 실수를 반복하지 않았다. API 앞 테스트 proxy는 성공 요청을 이 서버로 전달하며, 아래 503만 명시적인 장애 주입이다.
+
+| #59 권한 시나리오 | 판정 | 실제 UI·IDB·SQL 근거 |
+| --- | --- | --- |
+| 1. 신규 설치·미허용 | PASS (로컬 샘플) | 수집 origin=false, ACTIVE 세션에서도 방문 0, SQL 0 |
+| 2. 사용자가 사이트 허용 | PASS | 실제 승인 sheet의 `127.0.0.1의 데이터를 읽고 변경`과 `허용` 버튼 확인·선택 후 정확한 origin 권한=true |
+| 3. 신규 페이지 수집 | PASS | 새 경로로 이동해 새 유효 후보 생성, 앞 방문 POST 201·SQL 1행 |
+| 4. 기존 활성 페이지 적용 | PASS | 허용 직후 기존 문서가 valid/방문 1건으로 전환 |
+| 5. 실제 거부 후 차단 | PASS (차단) / BLOCKED (안내) | 별도 새 프로필의 실제 `거부` 버튼 선택 후 origin=false·기존/새 경로 방문 0·해당 세션 SQL 0. toolbar popup이 닫혀 거부 안내 텍스트 표시는 확인하지 못함. Escape 취소에서도 권한/방문 0을 별도 확인 |
+| 6. ACTIVE 도중 철회 | PASS | Chrome 설정의 자동 액세스 스위치 해제. origin=false, 로컬 session=false |
+| 7. 철회 후 추가 수집 차단 | PASS (관측 경로) | 새 경로에서도 방문 0·서버 기존 1행 유지 |
+| 기존 데이터·실패 영속 큐 처리 | PASS (ACTIVE) | 철회 전 ACK sequence1 및 장애 주입 503 후 실패 sequence2가 실제 IDB에 존재. 철회 후 후보/POST/PATCH 큐 모두 0, 이미 저장된 서버 1행은 유지 |
+| 8. 재허용 후 재개 | **FAIL (종단 저장)** | Chrome UI에서 localhost API 권한과 수집 origin을 각각 복구. 재허용만으로 수집되지 않음은 PASS. 같은 시작 요청을 명시적으로 재개하면 로컬 valid 생성이나 sequence1 재사용 → 실제 BE 409 |
+| 9. Chrome 완전 종료·재시작 | PASS (관측 상태 보존) / FAIL (재개 후 저장) | 같은 프로필에서 origin=true 유지, 수집 session=false, 충돌한 sequence1 실패 큐·후속 sequence2 대기 큐 보존, SQL 1행 유지. 정상 재개/종료 전체 성공을 뜻하지 않음 |
+| 10. 미허용 사이트 미수집 | PASS (로컬 샘플) | 초기/거부/철회 상태에서 기존·신규 경로 모두 0. 임의의 모든 사이트를 검증한 것은 아님 |
+| END_PENDING 도중 실제 UI 철회 | SKIP | 이번 수동 재검증은 일반 ACTIVE 철회. 기존 모의 END_PENDING 보존 검사는 별도 회귀 |
+
+Chrome 설정의 자동 액세스를 끄면 **API localhost 권한도 함께 꺼졌다**. 이를 UI에서 별도로 다시 켠 뒤 수집 origin을 켜고, 실제 API에 도달한 409를 확인했다. 따라서 재허용 실패를 단순 API 호스트 미허용으로 판단하지 않는다. 재허용은 Chrome 설정에서 수행했으므로 두 번째 승인 dialog를 확인했다는 뜻은 아니다.
+
+### 발견 결함: 철회 뒤 동일 세션 재개 시 sequence 재사용
+
+1. 새 세션에서 첫 합성 방문을 확정한다. 실제 POST 201, DB sequence1/서로 다른 방문 ID 정책 확인.
+2. 두 번째 방문을 확정할 때 proxy에서 503을 주입한다. 실제 IDB의 sequence2 미전송 원본을 확인한다.
+3. Chrome UI로 사이트 접근을 철회한다. 로컬 샘플과 전송 큐가 삭제되지만 서버 sequence1은 남는다.
+4. API 호스트와 수집 사이트 권한을 복구하고 같은 목표의 보존된 시작 요청을 재개한다. 같은 서버 sessionId로 돌아온다.
+5. 새로운 UUID 방문을 확정하면 **sequence1을 다시 보낸다**. 실제 서버는 `409 VISIT_SEQUENCE_CONFLICT`, IDB는 재시도 불가 실패 상태이며 DB는 기존 1행이다.
+
+원인: `background/index.ts`의 `permissions.onRemoved`가 `suspend()`로 시작 영수증을 보존하면서 `collector.state = emptyState()`로 `nextSequence`를 1로 되돌린다. 이후 `startSession()`은 보존된 ACTIVE 응답으로 같은 세션을 `collector.resume()`한다. 서버 저장 이력과 다음 순서를 복구하지 못한다. 큐 삭제 자체의 개인정보 보호 정책과 서버에 이미 저장된 순서의 무결성을 함께 보장해야 한다. 적절한 제품 수정 정책은 후속 작업에서 정해야 하며, 이번 E2E 브랜치에서 임의로 변경하지 않았다. 사용자의 새 Issue 생성 금지 지시에 따라 별도 Issue는 생성하지 않았다.
+
+```sh
+cd fe
+# 기본 실행에도 포함된다. 현 제품에서 expected 2 / received 1, exit 1.
+npm test -- tests/durable-background.test.ts -t 'keeps the next server sequence'
+```
+
+### 후속 실행 결과
+
+| 검사 | 판정 | 결과 |
+| --- | --- | --- |
+| FE `npm test` | **FAIL** | 27파일, **758 PASS / 1 FAIL / 0 SKIP**. 위 새 sequence 회귀만 실패 |
+| Naver 기본 회귀 | PASS | `search-live-dom` 25건, 과거 2개 재현도 PASS. Google/구형 Naver 회귀 유지 |
+| `npm run typecheck` / `npm run build` | PASS | 최신 main과 #59 테스트를 함께 검사 |
+| MV3 headless / headed | PASS | 정상 Naver fixture + 빈 결과 제외·IDB·방문 보존 회귀. 수동 권한과 별개 |
+| 실제 BE·DB 방문 스크립트 | PASS | 7방문/sequence1~7, 단계별 SQL/3Window, 중복 replay·장애·Unicode 경계·Worker 복구 |
+| 실제 BE·DB 행동 스크립트 | PASS | 기존 12개 시나리오, PATCH ACK·SQL·중복/stale·재시작/재로드 |
+| 실제 BE·DB 종료 스크립트 | PASS | 기존 12개 시나리오, 실제 ENDED/SQL·ACK 게이트·재시작/재로드·POST/PATCH 불일치 보존 |
+| #60의 실제 Naver·BE 361개 검사 | PASS (별도 실행 인용) | [#60 보고서](naver-search-dom-fix-validation.md). 이번 후속 단계의 재실행으로 계산하지 않음 |
+| Windows Stable·다른 Chrome 버전 | SKIP | 이번 macOS Chrome for Testing 환경 밖 |
+
+파일럿 전에는 **재허용 sequence 충돌 제품 수정**, Google 정상 검색의 실서비스 검증, 권한 거부 안내·실제 END_PENDING 철회, Naver 외부/블로그/뉴스 이동 및 동적 로딩의 미실행 항목을 해결해야 한다. #60의 Naver 누락 자체는 수정·실서비스 재검증됐지만 #59 전체 완료를 뜻하지 않는다. AI 학습·데이터셋 수집은 수행하지 않았다.
+
+후속 검증용 BE PID/실행 경로와 MySQL ID/issue label을 확인한 뒤 직접 만든 BE·컨테이너·익명 볼륨·임시 JAR·Chrome 프로필을 정리했다. 기존 서버/컨테이너는 종료하거나 삭제하지 않았다.
+
+## 최초 검증 기록 (PR #62 병합 전)
+
+아래 판정과 명령은 최초 실행 당시의 기록이다. Naver FAIL·known-bug SKIP 등은 위 후속 결과로 갱신됐으며 현재 실행 방법이나 최신 판정으로 사용하지 않는다.
 
 ## Git 기준과 환경
 

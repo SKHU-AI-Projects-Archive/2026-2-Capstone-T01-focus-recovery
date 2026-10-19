@@ -50,6 +50,35 @@ beforeEach(async () => {
 });
 
 describe('real Background with IndexedDB', () => {
+  it('keeps the next server sequence when explicitly resuming after site permission revocation', async () => {
+    // #59: actual Chrome + BE reproduced VISIT_SEQUENCE_CONFLICT after regrant.
+    const clock = await visit();
+    chromeApi.tabs.onRemoved.listeners[0](1);
+    await vi.waitFor(async () => expect((await raw()).value.visitDelivery.entries[0].phase).toBe('acked'));
+    const first = (await raw()).value.visitDelivery.entries[0].visit;
+    expect(first.sequence).toBe(1);
+    chromeApi.permissions.contains.mockResolvedValue(false);
+    chromeApi.permissions.getAll.mockResolvedValue({ origins: [] });
+    chromeApi.permissions.onRemoved.listeners[0]({ origins: ['https://example.com/*'] });
+    await message({ type: 'status' });
+    expect((await raw()).value.collection.candidates).toEqual([]);
+    chromeApi.permissions.contains.mockResolvedValue(true);
+    chromeApi.permissions.getAll.mockResolvedValue({ origins: ['https://example.com/*'] });
+    chromeApi.permissions.onAdded.listeners[0]({ origins: ['https://example.com/*'] });
+    await message({ type: 'status' });
+    expect((await message({ type: 'start', goalText: '공개 합성 문서 조사하기' })).ok).toBe(true);
+    frame = { documentId: 'after-regrant', url: 'https://example.com/after-regrant' };
+    clock.mockReturnValue(20000);
+    await message({ type: 'context' }, true);
+    clock.mockReturnValue(21500);
+    await message({ type: 'snapshot', sessionId: SERVER_SESSION_ID, snapshot: { ...(await describeUrl(frame.url))!, title: '재허용 공개 문서', content: '공개 합성 본문 '.repeat(20) } }, true);
+    chromeApi.tabs.onRemoved.listeners[0](1);
+    await message({ type: 'status' });
+    const next = (await raw()).value.collection.candidates[0];
+    expect(next.visitId).not.toBe(first.visitId);
+    expect(next.sessionId).toBe(first.sessionId);
+    expect(next.sequence).toBe(2);
+  });
   it('erases a failed POST queue on revocation and never restores samples on regrant or Worker restart', async () => {
     await visit();
     vi.mocked(fetch).mockResolvedValue(new Response('{}', { status: 503 }));
