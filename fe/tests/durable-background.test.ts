@@ -50,6 +50,67 @@ beforeEach(async () => {
 });
 
 describe('real Background with IndexedDB', () => {
+  it('collects the same active document after granting permission to a page opened during the session', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(10000);
+    chromeApi.permissions.contains.mockResolvedValue(false);
+    chromeApi.permissions.getAll.mockResolvedValue({ origins: [] });
+    expect((await message({ type: 'start', goalText: '공개 문서의 신규 사이트 권한 검증하기' })).ok).toBe(true);
+    chromeApi.webNavigation.onCommitted.listeners[0]({ tabId: 1, frameId: 0, documentId: frame.documentId, url: frame.url, transitionType: 'link' });
+    await message({ type: 'status' });
+    expect((await raw()).value.collection.candidates[0]).toMatchObject({ state: 'excluded', reason: 'url-policy' });
+    chromeApi.permissions.contains.mockResolvedValue(true);
+    chromeApi.permissions.getAll.mockResolvedValue({ origins: ['https://example.com/*'] });
+    chromeApi.permissions.onAdded.listeners[0]({ origins: ['https://example.com/*'] });
+    await message({ type: 'status' });
+    await message({ type: 'context' }, true);
+    clock.mockReturnValue(11500);
+    await message({ type: 'snapshot', sessionId: SERVER_SESSION_ID, snapshot: { ...(await describeUrl(frame.url))!, title: '권한 허용된 공개 문서', content: '개인정보 없는 공개 합성 본문 '.repeat(20) } }, true);
+    expect((await message({ type: 'status' })).status!.candidates.at(-1)?.state).toBe('valid');
+  });
+  it.each(['acked', 'unconfirmed', 'in-flight'] as const)('never reuses a %s sequence after repeated revocation, clear and Worker restart', async phase => {
+    const clock = await visit(), normalFetch = vi.mocked(fetch).getMockImplementation()!;
+    let release: (() => void) | undefined;
+    if (phase === 'unconfirmed') vi.mocked(fetch).mockResolvedValue(new Response('{}', { status: 503 }));
+    if (phase === 'in-flight') vi.mocked(fetch).mockImplementationOnce(async (_url, init) => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return new Response(JSON.stringify({ ...JSON.parse(init!.body as string), sessionId: SERVER_SESSION_ID, updatedAt: null }), { status: 201 });
+    });
+    chromeApi.tabs.onRemoved.listeners[0](1);
+    await vi.waitFor(async () => expect((await raw()).value.visitDelivery.entries[0].phase).toBe(phase === 'unconfirmed' ? 'retry-wait' : phase === 'in-flight' ? 'sending' : 'acked'));
+    const original = (await raw()).value.visitDelivery.entries[0].visit;
+    for (let i = 0; i < 2; i++) {
+      chromeApi.permissions.contains.mockResolvedValue(false);
+      chromeApi.permissions.getAll.mockResolvedValue({ origins: [] });
+      chromeApi.permissions.onRemoved.listeners[0]({ origins: ['https://example.com/*'] });
+      await message({ type: 'status' });
+    }
+    expect((await message({ type: 'clear' })).ok).toBe(true);
+    release?.(); vi.mocked(fetch).mockImplementation(normalFetch);
+    await restart();
+    const erased = (await raw()).value;
+    expect(erased.collection).toMatchObject({ session: null, nextSequence: 2, sequenceStart: 2, candidates: [], tabs: {} });
+    expect(erased.visitDelivery.entries).toEqual([]); expect(erased.behaviorDelivery.entries).toEqual([]);
+    expect(JSON.stringify(erased)).not.toContain(original.visitId);
+    expect(JSON.stringify(erased)).not.toContain(original.content);
+    chromeApi.permissions.contains.mockResolvedValue(true);
+    chromeApi.permissions.getAll.mockResolvedValue({ origins: ['https://example.com/*'] });
+    chromeApi.permissions.onAdded.listeners[0]({ origins: ['https://example.com/*'] });
+    expect((await message({ type: 'status' })).status!.session).toBeNull();
+    expect((await message({ type: 'start', goalText: '공개 합성 문서 조사하기' })).ok).toBe(true);
+    frame = { documentId: 'resumed-document', url: 'https://example.com/resumed' };
+    clock.mockReturnValue(20000); await message({ type: 'context' }, true); clock.mockReturnValue(21500);
+    await message({ type: 'snapshot', sessionId: SERVER_SESSION_ID, snapshot: { ...(await describeUrl(frame.url))!, title: '재개 문서', content: '재개 후의 새 공개 합성 본문 '.repeat(20) } }, true);
+    chromeApi.tabs.onRemoved.listeners[0](1);
+    await vi.waitFor(async () => expect((await raw()).value.visitDelivery.entries[0]).toMatchObject({ phase: 'acked', sequence: 2 }));
+    await vi.waitFor(async () => expect((await raw()).value.behaviorDelivery.entries[0].phase).toBe('acked'));
+    await restart();
+    expect((await message({ type: 'status' })).status!.storage!.phase).toBe('ready');
+    expect((await raw()).value.collection.nextSequence).toBe(3);
+    await message({ type: 'stop' }); await message({ type: 'clear' });
+    expect((await message({ type: 'start', goalText: '별도의 새 공개 작업 시작하기' })).ok).toBe(true);
+    expect((await raw()).value.collection.nextSequence).toBe(1);
+    expect((await raw()).value.collection.sequenceStart).toBeUndefined();
+  });
   it('keeps the next server sequence when explicitly resuming after site permission revocation', async () => {
     // #59: actual Chrome + BE reproduced VISIT_SEQUENCE_CONFLICT after regrant.
     const clock = await visit();
@@ -78,6 +139,9 @@ describe('real Background with IndexedDB', () => {
     expect(next.visitId).not.toBe(first.visitId);
     expect(next.sessionId).toBe(first.sessionId);
     expect(next.sequence).toBe(2);
+    await vi.waitFor(async () => expect((await raw()).value.visitDelivery.entries[0].phase).toBe('acked'));
+    await vi.waitFor(async () => expect((await raw()).value.behaviorDelivery.entries[0].phase).toBe('acked'));
+    await message({ type: 'stop' }); await message({ type: 'clear' });
   });
   it('erases a failed POST queue on revocation and never restores samples on regrant or Worker restart', async () => {
     await visit();
