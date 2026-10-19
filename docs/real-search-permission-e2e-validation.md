@@ -7,6 +7,7 @@
 ### 기준 및 변경 범위
 
 - 공식 main `cc01ff483ab16546c9b127296c3ad0bfb301bc8d`에서 PR #62 병합을 확인했다. #61은 OPEN / Draft였다. 기존 #59 브랜치에 공식 main을 merge하여 기존 작업과 이력을 보존했다. 다른 worktree·Fork main·공식 main은 변경하지 않았다.
+- 최종 fetch에서 PR #63의 Docker 설정이 추가된 최신 main `9cf9463031d901e7c59a34af215d9de308e7c06c`을 확인해 추가 merge했다. 두 main 사이에는 Dockerfile/Compose/env 예시/ignore 7파일만 달라 검증한 FE·BE 제품 코드와 테스트는 동일하다. 이 설정으로 서비스를 새로 실행한 것은 아니다.
 - #60의 제품 수정·fixture·기본 활성화된 25개 검색 회귀는 main에서 가져왔다. #59에서 별도의 제품 수정은 하지 않았다. 이전 `RUN_KNOWN_SEARCH_BUG` 조건은 제거됐으며, 원래 2개 실패 사례도 기본 실행에서 PASS한다.
 - #59 브라우저의 옛 Naver 안전 제외 기대를 **같은 최소 fixture의 정상 추출·organicResultCount=1·기존 방문 보존**으로 갱신했다. main의 빈 결과 제외 검사는 별도로 유지한다.
 - 새 권한 결함의 재현 테스트 1개를 `tests/durable-background.test.ts`에 추가했다. 현재 제품에서 **기대 sequence=2 / 실제=1로 실패**한다. SKIP·환경 변수·expected-failure로 숨기지 않았으며 기본 `npm test`가 exit 1임을 명시한다. 이 Draft PR은 바로 병합 가능한 상태가 아니다.
