@@ -108,6 +108,46 @@ Context Model이 실제 최종 분류 성능 향상에 기여하지 않는 경�
 - 모델 및 임계값은 Validation 데이터를 기준으로 결정합니다.
 - Test 데이터는 최종 설정 확정 이후 일반화 성능 평가에만 사용합니다.
 
+## 분류기 학습
+
+학습 데이터는 Git에 올리지 않고 `ai/data/` 아래에 둡니다. (`.gitignore` 처리됨)
+데이터 폴더에는 `sessions*.jsonl`, `windows*.jsonl`이 있어야 합니다.
+
+```bash
+cd ai
+python -m training.train                 # Embedding-only (A)
+python -m training.train --use-context   # Embedding + Context (B)
+python -m training.train --zip <데이터.zip> --sha256 <체크섬>   # 체크섬 확인 후 학습
+```
+
+- 겹치는 Window가 학습/평가에 나뉘지 않도록 목표(3개 이상일 때) 또는 세션 단위로 분할합니다.
+- 임계값 γ와 모델 타입은 Validation fold 결과로만 결정하고, held-out fold 결과는 보고에만 사용합니다.
+- 행동 측정값이 없는 데이터는 0이나 임의 값으로 채우지 않고 행동 특징을 제외하고 학습합니다.
+- 산출물: `ai/artifacts/drift_classifier.joblib`, `ai/artifacts/training_report.json` (Git 제외)
+- API 서버(`main.py`)는 학습된 분류기를 로드하며, 경로는 `DRIFT_CLASSIFIER_PATH`로 바꿀 수 있습니다.
+
+합성 데이터의 후보 라벨로 학습한 결과는 학습 코드의 작동 확인용이며 실제 모델 성능이 아닙니다.
+
+## 분석 API (AI-API-01)
+
+BE(`AiAnalysisClient`)가 호출하는 API입니다. 실행: `cd ai && uvicorn main:app --port 8000`
+
+- `POST /api/ai/analyses`
+  - 요청: `analysisId`, `sessionId`, `windowId`, `windowIndex`, `goalText`, `visits[5]` (position 1~5)
+  - 성공(200): 요청 식별자 3개, `result`, `pNormal`/`pTransition`/`pDrift`(합 1), `contextUsed`, `contextResult`, `featureSnapshot`, `modelVersions`, `analyzedAt`(UTC 밀리초)
+  - 실패: `{"code", "message", "fieldErrors"}`
+
+| code | HTTP | 상황 |
+| --- | --- | --- |
+| `INVALID_REQUEST` | 422 | 요청 형식·값 오류 (방문 수, position, 빈 목표 등) |
+| `ANALYSIS_ID_CONFLICT` | 409 | 같은 `analysisId`로 다른 내용의 요청 |
+| `ANALYSIS_IN_PROGRESS` | 409 | 같은 `analysisId`의 분석이 처리 중 |
+| `AI_ANALYSIS_FAILED` | 500 | 분석 실패 (Context 출력 재검증 실패 등) |
+| `AI_NOT_READY` | 503 | 모델 로드 중 또는 로드 실패 |
+
+- 같은 `analysisId`와 같은 내용으로 다시 요청하면 저장된 응답을 그대로 반환합니다. (메모리 보관, 재시작 시 초기화)
+- `GET /health`: 모델 로드가 끝나면 200 `{"status": "READY"}`, 그 전에는 503 `AI_NOT_READY`
+
 ## 개발 상태
 
 현재 AI 영역은 기능 설계가 완료된 초기 개발 환경 구성 단계입니다.
