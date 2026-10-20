@@ -1,8 +1,74 @@
 # 실제 검색·Chrome 사이트 권한 E2E 검증 — Issue #59
 
-검증일: 2026-10-19 (Asia/Seoul). [Issue #59](https://github.com/SKHU-AI-Projects-Archive/2026-2-Capstone-T01-focus-recovery/issues/59)의 전체 본문을 기준으로 한다. **최신 판정은 아래 #65 반영 결과다. 파일럿 보류: Google BLOCKED, 세션 도중 허용한 기존 문서 수집 FAIL(#67). #64의 재허용 순서 충돌은 수정됐다.** 합성 fixture, 모의 Chrome API, manifest 사전 권한은 실제 서비스·수동 승인 성공을 대체하지 않는다. 이전 실패와 환경 격리 실수 기록도 보존한다.
+검증일: 2026-10-19~20 (Asia/Seoul). [Issue #59](https://github.com/SKHU-AI-Projects-Archive/2026-2-Capstone-T01-focus-recovery/issues/59)의 전체 본문을 기준으로 한다. **최신 판정은 아래 #70 반영 결과다. #60·#64·#67은 수정됐고 기본 FE 테스트는 PASS다. Google BLOCKED와 실제 거부 안내 FAIL(#74), 블로그·뉴스 수집 등의 미완료 범위 때문에 파일럿은 보류한다.** 합성 fixture·모의 Chrome API·manifest 사전 권한을 실제 서비스·네이티브 승인 성공으로 대체하지 않는다. 이전 실패와 환경 격리 실수 기록도 보존한다.
 
-## #65 병합 후 최신 검증 (2026-10-19 저녁)
+## #70 병합 후 최신 검증 (2026-10-20)
+
+### 기준·범위·환경
+
+- PR #70의 MERGED / Issue #67 CLOSED와 공식 main **`3778926233b3094ab0615ed959a06c44d0858bfa`**를 확인하고 기존 #59 브랜치에 merge했다. 시작 worktree는 clean이었다. `durable-background.test.ts` 충돌은 main의 추가 #67 회귀 전부와 #59의 원래 재현·실패 큐 삭제 단언을 함께 보존해 해결했다. 중복 재현은 만들지 않았다.
+- 병합 커밋 `511af9b`에서 **27파일 / 779 PASS / FAIL·SKIP 0**이다. 기대값을 완화하거나 실패 테스트를 제거하지 않았다. typecheck 포함 production build PASS. #59 자체 diff에는 제품 변경이 없다. main에서 상속된 AI 변경은 이번 작업에서 수정·실행·학습하지 않았다.
+- #67의 실제 네이티브 로컬 허용, 같은 documentId의 비소급 새 방문·중복 방지·SQL1행·ENDED는 [#70 검증 보고서](active-page-permission-fix-validation.md)의 별도 실행 PASS를 인용한다. 해당 보고서의 Naver 허용 클릭 시각 계측 제한도 유지한다. 이번 회차에 허용 전체를 다시 실행했다고 세지 않는다.
+- macOS27.0.1 arm64 / Chrome for Testing151.0.7922.34 / Node25.9.0 / npm11.12.1 / Java21.0.10 / Spring Boot4.1.1 / MySQL8.4.9. 새 DB `focus-recovery-issue59-20261020-d9ba`, 생성 ID `d160ae5316e3…`, issue=59 label, DB 포트50753이다. 고정 JAR `/tmp/focus59-20261020-be-om7wvh/server.jar`, 새 BE PID4304 / 동적 API50775, datasource·Started 로그를 확인했다. **각 수동 검증 세션 생성 직후 이번 DB의 세션1행을 확인했다.**
+- 새 headed 프로필은 수집 origin 사전 허용 없이 네이티브 거부를 검사했다. 별도 headless DOM 프로필은 Naver·선택한 블로그/뉴스/외부 호스트만 임시 manifest에 사전 허용했다. 실제 응답에 route interception/HTML 대체를 사용하지 않았다. 사전 권한 실행은 native 승인 PASS와 구분한다.
+
+### 실제 Chrome 권한 거부·안내: 차단 PASS / 안내 FAIL (#74)
+
+새 ACTIVE 세션에서 개인정보 없는 로컬 문서를 연 뒤 실제 toolbar Popup → `현재 사이트 수집 허용` → Chrome 추가 승인 sheet의 **거부**를 선택했다. 네이티브 `127.0.0.1의 데이터를 읽고 변경 / 거부·허용`을 읽은 직후 거부를 선택했다. 두 번 모두 UI 변경 경고 없이 동작했으며 실제 origin=false를 확인했다. 기존·신규 경로의 FE 방문0 / 전용 SQL0행으로 수집 차단은 **PASS**다. 이 세션은 ENDED/0행으로 종료했다.
+
+거부 직후 Popup도 사라져 runtime POPUP context가0개였고 화면의 거부 안내가 없었다. 다시 toolbar Popup을 열어도 `사이트 수집 권한이 허용되지 않았습니다.`가 없었다. 동일 프로필에서 실제 거부를 반복해 Popup 닫힘/안내 없음과 권한=false를 다시 확인했다. 이전 회차의 “거부 선택 불명확” BLOCKED와 달리, 이번에는 **거부가 실제 적용된 상태의 안내 FAIL**이다.
+
+중복 이슈가 없는지 확인한 뒤 [Bug #74](https://github.com/SKHU-AI-Projects-Archive/2026-2-Capstone-T01-focus-recovery/issues/74)로 분리했다. `allowSite()`는 React 지역 error에만 안내를 넣어 Popup 재생성 뒤 남지 않는다. 정확한 native close/promise 순서와 UX 수정은 후속 제품 작업이다. #59에서 제품을 임의 수정하지 않았다. 기존 `permission-popup.test.ts`의 같은 mount 내 mock 거부 안내 PASS는 native Popup 수명 경계를 입증하지 못한다. 이 차이를 합성 테스트 기대값 변경으로 숨기지 않는다.
+
+### 실제 Google: BLOCKED
+
+수집 세션을 실제 ENDED/clear한 뒤 새 탭으로 공개 검증어 `Spring Boot JWT`에 **한 번** 접근했다. HTTP200이지만 `/sorry/…`, 일반 결과 제목0이었다. 정상 DOM·수집·저장은 BLOCKED다. CAPTCHA 조작·우회·차단 뒤 반복 요청을 하지 않았다. 비활성 세션이라 차단 화면의 IP/원문을 수집하지 않았다. 이 실행은 활성 수집기의 차단 화면 안전 제외 PASS를 대신하지 않는다.
+
+### 실제 Naver·외부 링크·동적 DOM·광고·SQL
+
+1. 별도 headless Chrome에서 실제 `Spring Boot JWT` 통합검색 HTTP200 / 일반 결과7개 / 유효 방문을 확인했다.
+2. 실제 AI 브리핑의 `펼쳐서 더보기` 버튼을 눌렀다. 버튼이 사라지고 #main_pack의 child/character MutationObserver 기록 **1건**을 관측했다. 초기 즉시 조회는0이었고 이후 턴에1이 됐다. 그 후 확정된 원래 검색 방문의 **동일 visitId·동일 본문**을 확인했다. 실제 AI 영역 변경에도 본문/방문이 오염되지 않는 한정 PASS다. 일반 결과 증분 로딩·유기 결과 SPA 성공으로 확대하지 않는다.
+3. 일반 웹 카드의 실제 제목 링크를 눌러 `tech.hyeonki-min.com`의 공개 기술 문서를 새 탭으로 열었다. 이 목적지는 valid 방문을 생성했고, 원래 Naver 검색과 다른 visitId / sequence2로 저장됐다. **수집 가능한 외부 문서의 링크 이동→방문→SQL은 이번 PASS**다. 이전 `nginxstore.com`의 민감 입력 제외 결과도 그대로 유효하다.
+4. 같은 통합검색의 실제 블로그 제목 링크를 눌렀다. 본문/유효 방문이 확보되지 않아 약20초의 유효 상태 대기 검사가 timeout했다. 닫은 뒤 해당 후보는 `excluded/unavailable-content`, snapshot/DB 방문 없음이었다. **링크 이동·미저장 확인만 PASS, 블로그 정상 본문/저장은 BLOCKED(본문 미확보)**다. 전체 HTML·프레임 본문을 별도로 긁어 수집 정책을 우회하지 않았다.
+5. 실제 검색창에서 `인공지능`을 입력·Enter 제출하고 유효 검색 방문을 확인한 뒤 뉴스 링크를 눌렀다. 실제 목적지는 `n.news.naver.com`의 기사이며 query key `sid`가 있었다. 호스트 권한은true였지만 기존 sensitiveQuery 정책에 따라 **url-policy 제외 / 체류0 / snapshot·DB 방문 없음**이었다. **이동·정책 적용은 PASS, 뉴스 본문/저장은 BLOCKED(현재 URL 정책)**다. 정책을 완화하거나 링크의 파라미터를 지워 별도 요청하지 않았다.
+6. 실제 검색창으로 공개 검색어 `노트북`을 제출해 유효 검색 방문과 화면에 보이는 `광고` 표지3개를 확인했다. 각 표지의 가까운 부모에서 찾은 광고 연관 링크 텍스트4개(길이22/24/8/13)는 최종 수집 본문에 모두 없었다. 이 관측 표본의 제외는 PASS이며 모든 광고 형식·개인화/A-B 전체 보장은 아니다. `#power_link` 컨테이너 개수만으로 광고 결과를 검증했다고 세지 않는다.
+7. 세션 종료 후 **유효 방문4행 / sequence1,2,3,4 / 서로 다른 UUID / ENDED**다. 검색3개와 외부 문서1개다. 각 행의 정규화 URL·제목·본문·검색어·순서·활성 체류시간·탭 전환 수·behaviorVersion을 FE 최종 원본과 정확히 비교했다. SQL JSON은 UTF-8/raw로 조회해 개행·한글을 보존했다. 본문 원문을 결과 로그/GitHub에 게시하지 않았다.
+8. 확정된 외부 방문 요청을 동일하게 재전송해 **200 / DB4행 유지**를 확인했다. 이 관측은 기존 방문의 멱등 재전송이며 새 방문을 종료된 세션에 추가하는 성공을 의미하지 않는다. 5방문 미만이므로 이번 수동 세션의 Window 생성 성공으로 세지 않는다.
+
+### Issue #59 전체 체크리스트의 최신 판정
+
+| Issue 본문 범주 | 최신 판정·남은 범위 |
+| --- | --- |
+| 1. 기존 구현/테스트/환경 분석 | PASS — #55/#56·검색/권한/큐·#60/#64/#67 수정과 원래 미검증 범위 분석 |
+| 2. Google 7항목 | BLOCKED — 정상 검색어/결과/정규화/연속 검색/외부 이동/동적 변경/활성 제외 미검증. CAPTCHA를 정상 검색으로 세지 않음 |
+| 3. Naver 7항목 | 검색어/결과/정규화/연속 검색/외부 valid 저장 PASS. 블로그·뉴스 링크와 안전 제외 PASS, 해당 본문/저장은 BLOCKED(현재 수집 범위·정책). 실제 AI 영역 DOM 변경 한정 PASS, 일반 결과 증분 로딩/SPA SKIP. 빈 결과 제외는 #60 별도 실측 PASS |
+| 4. Chrome 권한 | 신규/미허용·실제 거부 차단 이번 PASS. 허용·신규/기존 문서·ACTIVE 철회/삭제·동일 세션 재허용/재시작·END_PENDING 보존은 #64/#67 및 이전 실제 실행 PASS를 구분해 인용. **거부 안내는 이번 FAIL(#74)** |
+| 5. FE→BE→DB | Naver3+외부1, 정확한 필드/행동/UUID/sequence/멱등/종료 이번 PASS. Google BLOCKED. 5방문 이상 Window·재전송/재시작은 아래 통합 회귀와 #64 별도 실측으로 확인 |
+| 6. 개인정보/수집 정책 | 이번 신규 DB/공개 내용/권한 거부·민감 URL 차단/원문 비게시 PASS. 이전 초기 포트 충돌 무효 실행은 삭제하지 않고 아래 보존 |
+| 7. 테스트 보강/회귀 | #60 fixture·#64/#67 기본 회귀 포함 779 PASS. 이번 #74는 실제 Chrome UI 절차로 재현하며 단일 mount mock으로 native 결과를 대체하지 않음. 기존 방문/행동/종료 통합 재실행 결과는 아래 기록 |
+| 8. 문서화/파일럿 판단 | 결과·한계·#60/#64/#67 해결·새 #74·재실행 방법 기록 PASS. Google·#74·블로그/뉴스/일반 결과 동적 변화 때문에 파일럿 보류 |
+
+| 실행 검사 | 결과 |
+| --- | --- |
+| FE `npm test` | PASS — 27파일 / 779개 / FAIL·SKIP 0 |
+| typecheck / production build | PASS |
+| headed MV3 | FAIL — 초기 `active document becomes valid` 대기 timeout (`browser-test.mjs:150`), 다중 윈도우 분기 도달 전 중단. 원인 미확정; 기대 체류시간을 낮추지 않음 |
+| headless MV3 | PASS — 검색 fixture·큐/ACK·Worker/탐색/세션 회귀. native 다중 창 분기는 SKIP |
+| 실제 방문 통합 | PASS (exit0) — 7방문/순서1–7, 단계별 Window0/0/0/0/1/2/3, 재전송200, 장애/Worker/Unicode/명시적400 회귀 |
+| 실제 행동 통합 | PASS (exit0) — 12개 시나리오, POST/PATCH ACK·SQL·멱등/stale·재시도 예산·Worker/브라우저/확장 재시작 |
+| 실제 세션 종료 통합 | PASS (exit0) — 12개 시나리오, 최종 ACK 게이트·ENDED·종료 영수증/저장 실패 복구·POST/PATCH 불일치 보존 |
+| 실제 native 거부 / Naver·외부·SQL | 위 명시 범위 PASS, 안내 FAIL(#74), 블로그 대기 timeout·뉴스 정책 제외 기록 |
+| Windows Stable / BE 단위 테스트 신규 실행 | SKIP — 환경 밖 / BE 소스·계약 불변, 실제 API·DB 회귀로 영향 확인 |
+
+기존 10월19일 기록은 아래에 당시 판정으로 보존한다. #67의 기본 FAIL과 파일럿 장애는 #70으로 해결됐지만, #59 전체 완료를 뜻하지 않는다.
+
+이번 회차의 직접 수동/실서비스 세션2개는 SQL에서 모두 ENDED, 방문 총4행을 다시 확인했다. 실제 통합 스크립트의 검색 응답은 합성 fixture이므로 실서비스 검색 PASS에 합산하지 않는다. 재실행 명령은 아래 기존 절의 동일 스크립트를 사용하되, 자신이 새로 만든 DB와 확인한 API 포트를 명시한다.
+
+검증 후 BE PID/JAR 경로와 컨테이너 전체 ID·issue label을 다시 대조해 이번 BE·DB·익명 볼륨·고정 JAR를 정리했다. 두 수동 프로필과 자동화 스크립트의 임시 프로필/확장도 정리됐다. 기존 서버·컨테이너·사용자 DB·브라우저 프로필은 건드리지 않았다.
+
+## #65 병합 후 당시 검증 (2026-10-19 저녁, #70 이전)
+
+이하의 “현재/최신” 표현은 각 기록 작성 당시를 뜻한다. #67 FAIL과 당시 미실행 범위를 오늘의 판정으로 사용하지 않으며, 오늘의 결과는 맨 위 #70 반영 절을 따른다.
 
 ### 기준·회귀
 

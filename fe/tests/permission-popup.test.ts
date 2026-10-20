@@ -29,6 +29,7 @@ async function allow() {
   await vi.waitFor(() => expect(button()?.disabled).toBe(false));
   button().click();
 }
+// #74: a mounted React test cannot reproduce Chrome closing/reopening the toolbar Popup.
 describe('optional site permission Popup adapter (mock Chrome API, not a native dialog)', () => {
   it('shows denial and does not synchronize collection permission', async () => {
     await allow();
