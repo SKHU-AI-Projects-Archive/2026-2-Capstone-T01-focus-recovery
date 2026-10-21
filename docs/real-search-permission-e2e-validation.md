@@ -1,8 +1,17 @@
 # 실제 검색·Chrome 사이트 권한 E2E 검증 — Issue #59
 
-검증일: 2026-10-19~20 (Asia/Seoul). [Issue #59](https://github.com/SKHU-AI-Projects-Archive/2026-2-Capstone-T01-focus-recovery/issues/59)의 전체 본문을 기준으로 한다. **최신 판정은 아래 #70 반영 결과다. #60·#64·#67은 수정됐고 기본 FE 테스트는 PASS다. Google BLOCKED와 실제 거부 안내 FAIL(#74), 블로그·뉴스 수집 등의 미완료 범위 때문에 파일럿은 보류한다.** 합성 fixture·모의 Chrome API·manifest 사전 권한을 실제 서비스·네이티브 승인 성공으로 대체하지 않는다. 이전 실패와 환경 격리 실수 기록도 보존한다.
+검증일: 2026-10-19~21 (Asia/Seoul). [Issue #59](https://github.com/SKHU-AI-Projects-Archive/2026-2-Capstone-T01-focus-recovery/issues/59)의 전체 본문을 기준으로 한다. **검증 자료는 리뷰 가능한 상태다. 파일럿은 Google BLOCKED·블로그/뉴스 등 미완료 범위 때문에 계속 보류한다. #74 제품 수정은 별도 PR #76에 있으며 아직 main에 병합되지 않았다.** 합성 fixture·모의 Chrome API·manifest 사전 권한을 실제 서비스·네이티브 승인 성공으로 대체하지 않는다. 이전 실패와 환경 격리 실수 기록도 보존한다.
 
-## #70 병합 후 최신 검증 (2026-10-20)
+## 리뷰 준비와 #74 후속 분리 (2026-10-21)
+
+- 공식 main `8104072ff7593c5129f2769a4e4835d49d5406e9`를 #59 브랜치에 merge했다 (`44de31b`). FE 제품 코드는 그대로이며 미병합 #74 제품 수정을 이 검증 PR에 섞지 않았다. 이번 #59 브랜치에서 **27파일 / 779 PASS / FAIL·SKIP0**, typecheck 포함 production build PASS를 다시 확인했다.
+- #74는 독립 브랜치/수정 [PR #76](https://github.com/SKHU-AI-Projects-Archive/2026-2-Capstone-T01-focus-recovery/pull/76)으로 분리했다. Popup을 다시 열 때 현재 Chrome 권한을 재조회해 미허용 상태와 허용 방법을 표시하며, 안내용 거부 이력·사이트 주소를 영속 저장하지 않는다. #59의 기존 `permission-popup.test.ts`와 겹치지 않는 독립 회귀 파일을 사용한다.
+- [#76 검증 보고서](https://github.com/hyeon-marina/2026-2-Capstone-T01-focus-recovery/blob/c7ad9ab08b284a3b3f3e48c2e3753c759e4b540d/docs/permission-denial-feedback-fix-validation.md)의 별도 실행은 FE783개·build·최종 MV3·실제 방문/행동/종료 통합 PASS다. 실제 네이티브 Escape 취소 뒤 origin=false/SQL0/Popup 재진입 안내, Chrome 완전 재시작 뒤 안내, 실제 재허용 뒤 허용 상태/SQL1/ENDED를 확인했다. **수정 후 거부 버튼 조작2건은 실제 권한=true여서 BLOCKED(선택 불확실)**로 남겼다. 취소 경로 성공을 거부 버튼 클릭 성공으로 세지 않는다.
+- 위 결과는 **#76 수정 브랜치** 검증이다. main의 #74가 이미 해결됐거나, #59에서 제품을 수정했다는 뜻이 아니다. 10월20일 main에서 관측한 거부 안내 FAIL 기록은 아래에 보존한다.
+- PR #61은 결과·재현·실패·제약을 리뷰할 수 있는 검증 자료이므로 Draft를 해제한다. 남은 체크리스트가 있는 #59를 자동 종료하지 않도록 PR 본문은 `Closes #59` 대신 `Refs #59`로 연결한다. 파일럿 완료나 미실행 항목 PASS 판정과는 별개다. 자동 Merge는 하지 않는다.
+- Google·Naver 실서비스 요청과 headed 다중 창 검사는 오늘 반복하지 않았다(SKIP). 아래 Google CAPTCHA BLOCKED, 블로그/뉴스 본문·저장 BLOCKED, 일반 결과 증분 DOM/SPA SKIP, 10월20일 headed 자동 체류 대기 FAIL을 유지한다. Windows Stable도 미검증이다. 검증 자료 리뷰와 제품/환경 후속 작업을 구분한다.
+
+## #70 병합 후 실제 검증 기록 (2026-10-20)
 
 ### 기준·범위·환경
 
