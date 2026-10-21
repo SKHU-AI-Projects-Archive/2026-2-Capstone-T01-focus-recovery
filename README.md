@@ -58,3 +58,4 @@ AI는 최근 5개의 유효 Page Visit을 기준으로 탐색 상태를 분석�
 | `docs/be-spec.md` | Backend 기능명세서 |
 | `docs/fe-spec.md` | Frontend 기능명세서 |
 | [기존 문서 권한 적용 검증](docs/active-page-permission-fix-validation.md) | Issue #67 수정 및 실제 Chrome·BE·DB 검증 결과 |
+| [권한 미허용 안내 검증](docs/permission-denial-feedback-fix-validation.md) | Issue #74 수정 및 Popup 재진입·네이티브 취소·재허용 검증 |
