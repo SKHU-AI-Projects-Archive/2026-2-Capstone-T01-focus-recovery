@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { build } from 'vite';
+import { readDurable } from './durable-test-utils.mjs';
 
 const bodyA = 'JWT 문서에서 토큰 검증 방법과 Spring Security 인증 처리 절차를 설명합니다. 안전한 공개 기술 문서의 의미 있는 본문입니다.';
 const bodyB = '우주 탐사선은 먼 행성의 대기와 암석을 연구합니다. 천문학자들이 수집한 관측 자료로 태양계 형성 과정을 분석하는 과학 기사입니다.';
@@ -93,6 +94,10 @@ try {
     const url = new URL(route.request().url());
     const google = url.hostname === 'www.google.com';
     const parameter = google ? 'q' : 'query';
+    if (!google && url.searchParams.get(parameter) === 'OBSERVED_NAVER_LAYOUT') {
+      await route.fulfill({ contentType: 'text/html; charset=utf-8', body: await readFile(resolve('tests/fixtures/naver-20261019.html'), 'utf8') });
+      return;
+    }
     const empty = url.searchParams.get(parameter) === 'NO_RESULTS';
     const card = google
       ? '<div class="MjjYud"><a href="https://example.com/docs"><h3>인증</h3></a></div>'
@@ -290,6 +295,17 @@ try {
   result = await status();
   assert.equal(result.candidates.at(-1).reason, 'unavailable-content', 'empty Naver results retain the bounded exclusion policy');
   assert.deepEqual(result.visits.map(v => [v.visitId, v.content]), preserved);
+  // #60 now supports this observed structure; retain #59's fixture as a positive regression.
+  await page.goto('https://search.naver.com/search.naver?query=OBSERVED_NAVER_LAYOUT'); await page.bringToFront();
+  result = await until(state => state.visits.length === preserved.length + 1, 'observed Naver structure creates one valid visit after #60');
+  const observedVisit = result.visits.at(-1);
+  assert.equal(observedVisit.searchQuery, 'OBSERVED_NAVER_LAYOUT');
+  assert.equal(observedVisit.content, '검색어: OBSERVED_NAVER_LAYOUT\n\n검색 결과 1\n제목: 공개 인증 문서\n설명: 공개 검색 설명입니다.');
+  assert.deepEqual(result.visits.slice(0, -1).map(v => [v.visitId, v.content]), preserved);
+  const observed = (await readDurable(popup, 'collection')).candidates.find(c => c.visitId === observedVisit.visitId);
+  assert.equal(observed.state, 'valid');
+  assert.equal(observed.snapshot.organicResultCount, 1);
+  console.log('PASS: synthetic observed Naver fixture creates one visit with exact title/snippet and committed IDB evidence after #60');
   await popup.evaluate(() => chrome.runtime.sendMessage({ type: 'stop' }));
   const stopped = await status();
   await until(state => state.visitDelivery.visits.length === stopped.readyVisits.length && state.visitDelivery.visits.every(visit => visit.phase === 'acked'), 'all finalized visits receive validated server ACK');

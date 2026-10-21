@@ -238,6 +238,38 @@ describe('real Background with IndexedDB', () => {
     await vi.waitFor(async () => expect((await raw()).value.behaviorDelivery.entries[0].phase).toBe('acked'));
     await message({ type: 'stop' }); await message({ type: 'clear' });
   });
+  it('erases a failed POST queue on revocation and never restores samples on regrant or Worker restart', async () => {
+    await visit();
+    vi.mocked(fetch).mockResolvedValue(new Response('{}', { status: 503 }));
+    chromeApi.tabs.onRemoved.listeners[0](1);
+    await vi.waitFor(async () => expect((await raw()).value.visitDelivery.entries[0]).toMatchObject({ attempts: 1, phase: 'retry-wait' }));
+    const original = (await raw()).value.visitDelivery.entries[0].visit;
+    const snapshot = (await raw()).value.collection.candidates[0].snapshot;
+    expect(original.content.length).toBeGreaterThan(0);
+    chromeApi.permissions.contains.mockResolvedValue(false);
+    chromeApi.permissions.getAll.mockResolvedValue({ origins: [] });
+    chromeApi.permissions.onRemoved.listeners[0]({ origins: ['https://example.com/*'] });
+    await message({ type: 'status' });
+    const postCount = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/visits')).length;
+    const sent = postCount();
+    const erased = (await raw()).value;
+    expect(erased.collection.candidates).toEqual([]);
+    expect(erased.visitDelivery.entries).toEqual([]);
+    expect(erased.behaviorDelivery.entries).toEqual([]);
+    expect(erased.collection.session).toBeNull();
+    chromeApi.permissions.contains.mockResolvedValue(true);
+    chromeApi.permissions.getAll.mockResolvedValue({ origins: ['https://example.com/*'] });
+    chromeApi.permissions.onAdded.listeners[0]({ origins: ['https://example.com/*'] });
+    await message({ type: 'status' });
+    expect(await message({ type: 'context' }, true)).toMatchObject({ sessionId: null });
+    await message({ type: 'snapshot', sessionId: SERVER_SESSION_ID, snapshot }, true);
+    await restart();
+    const status = (await message({ type: 'status' })).status!;
+    expect(status.session).toBeNull();
+    expect(status.visits).toEqual([]);
+    expect((await raw()).value.visitDelivery.entries).toEqual([]);
+    expect(postCount()).toBe(sent);
+  });
   it('restores after session storage disappears, retains identifiers and excludes the shutdown gap', async () => {
     const clock = await visit(), before = (await raw()).value.collection;
     legacy = {}; chromeApi.storage.session = area(legacy); clock.mockReturnValue(999999);

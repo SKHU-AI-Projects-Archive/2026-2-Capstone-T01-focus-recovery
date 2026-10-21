@@ -4,6 +4,8 @@ Issue #64에서 사이트 권한 철회 후 동일 세션을 재개할 때 이�
 
 Issue #60에서 Naver 일반 웹 카드의 새 DOM 경계를 지원합니다. [수정·검증 보고서](../docs/naver-search-dom-fix-validation.md)에 실제 Chrome → 전용 BE/MySQL의 영어·한국어 저장 결과와 남은 검증 범위를 기록합니다. 사이트 권한은 테스트 manifest에 사전 부여했으므로 사용자 승인 dialog 검증과 구분합니다.
 
+Issue #59의 [실제 검색·사이트 권한 검증 보고서](../docs/real-search-permission-e2e-validation.md)는 최초 실패와 #60/#64/#67 수정 후 결과를 구분합니다. 최신 main 반영 후 이 검증 브랜치의 FE 779개 테스트가 통과했고 실제 Naver 외부 문서 저장도 확인했습니다. #74 제품 수정은 별도 PR #76으로 분리했습니다. 검증 자료는 리뷰 대상이며 Google 접근 제한·블로그/뉴스 수집 등 파일럿 미완료 범위는 유지합니다. 합성·사전 권한 실행과 실제 네이티브 승인 결과를 구분해 기록합니다.
+
 Manifest V3 개발용 수집기입니다. 서버 작업 세션 → 확정 방문 POST → POST ACK 이후 누적 행동 PATCH → 최종 ACK 이후 서버 종료와 END_PENDING 영속 복구를 연동합니다.
 
 본문은 최대 **5,000 Unicode code points**까지 추출하고, IndexedDB 큐·전송·저장에서는 추출 원본을 유지합니다. Issue #56에서 BE 검증도 동일 기준으로 통일했습니다. [Unicode 계약 수정·회귀 검증](../docs/unicode-content-length-validation.md)에 원인·경계값·실제 Chrome → BE → MySQL 결과를 기록합니다. DB 스키마 변경은 없습니다.
