@@ -3,11 +3,20 @@ import { createRoot } from 'react-dom/client';
 import type { DevStatus, PopupMessage, Reply } from '../shared/types';
 import { validGoal } from '../shared/goal';
 import './style.css';
+async function currentSitePattern() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.url) throw new Error();
+  const url = new URL(tab.url);
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error();
+  return `${url.origin}/*`;
+}
 function App() {
   const [goal, setGoal] = useState('');
   const [status, setStatus] = useState<DevStatus>();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [sitePermission, setSitePermission] = useState<boolean | null>();
+  const sitePermissionVersion = useRef(0);
   const requestInFlight = useRef(false);
   const [inspect, setInspect] = useState(false);
   const end = status?.sessionEnd;
@@ -39,17 +48,23 @@ function App() {
     finally { requestInFlight.current = false; setBusy(false); }
   }
   useEffect(() => { void request({ type: 'status' }); }, []);
+  useEffect(() => {
+    const version = ++sitePermissionVersion.current;
+    // A native permission dialog can close the Popup before its request resolves.
+    void currentSitePattern().then(pattern => chrome.permissions.contains({ origins: [pattern] })).catch(() => null).then(allowed => {
+      if (version === sitePermissionVersion.current) setSitePermission(allowed);
+    });
+    return () => { sitePermissionVersion.current++; };
+  }, []);
   async function allowSite() {
     setBusy(true); setError('');
+    sitePermissionVersion.current++; setSitePermission(undefined);
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.url) throw new Error();
-      const url = new URL(tab.url);
-      if (!['http:', 'https:'].includes(url.protocol)) throw new Error();
-      const granted = await chrome.permissions.request({ origins: [`${url.origin}/*`] });
+      const granted = await chrome.permissions.request({ origins: [await currentSitePattern()] });
+      setSitePermission(granted);
       if (!granted) { setError('사이트 수집 권한이 허용되지 않았습니다.'); return; }
       await request({ type: 'sync-permissions' });
-    } catch { setError('일반 HTTP(S) 페이지에서 확장 프로그램을 열어 주세요.'); }
+    } catch { setSitePermission(null); setError('일반 HTTP(S) 페이지에서 확장 프로그램을 열어 주세요.'); }
     finally { setBusy(false); }
   }
   return <main>
@@ -57,6 +72,10 @@ function App() {
     <p>작업 목표와 허용한 사이트의 확정된 방문·본문·누적 행동 정보를 설정된 API 서버에 전송합니다.</p>
     <p>작업 종료 시 수집을 중단하고 마지막 방문·행동 정보의 서버 저장을 확인한 뒤 서버 세션을 종료합니다.</p>
     <button disabled={busy} onClick={() => void allowSite()}>현재 사이트 수집 허용</button>
+    <p role="status">{sitePermission === undefined ? '현재 사이트 접근 권한 확인 중…'
+      : sitePermission === null ? '현재 사이트 접근 권한을 확인할 수 없습니다. 일반 HTTP(S) 페이지에서 다시 열어 주세요.'
+      : sitePermission ? '현재 사이트 접근 권한: 허용됨' : '현재 사이트 접근 권한: 허용되지 않음'}</p>
+    <p>권한을 거부하거나 철회한 사이트는 수집하지 않습니다. 수집하려면 ‘현재 사이트 수집 허용’을 눌러 주세요.</p>
     <p>IndexedDB: {storage?.phase ?? 'initializing'} / {storage?.recovered ? '이전 작업 복구됨' : '이전 작업 없음'}</p>
     {storage?.phase === 'failed' && <p role="alert">영속 저장·복구 실패 ({storage.error}). 서버 오류와 별개로 전송을 차단했습니다. 원본을 보존했으며 Worker 재시작 후 확인이 필요합니다.</p>}
     {storage?.metadataSyncPending && <p role="alert">IndexedDB 데이터는 저장됐지만 local 세션 메타데이터 동기화가 남았습니다. 서버 저장 오류와 구분하며, 상태 새로고침 또는 Worker 재시작에서 같은 영수증으로 확인합니다.</p>}
