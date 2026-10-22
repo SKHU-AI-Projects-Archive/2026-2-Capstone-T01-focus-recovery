@@ -87,6 +87,8 @@ class ModelState:
             pipeline = FocusRecoveryPipeline.from_default()
             # 첫 요청의 초기화 지연을 없애기 위해 READY 전에 한 번 추론한다.
             pipeline.embedding_model.warm_up()
+            if pipeline.context_model is not None:
+                pipeline.context_model.warm_up()
             self.pipeline = pipeline
         except Exception as e:  # 로드 실패 시 서버는 떠 있되 AI_NOT_READY로 응답한다
             self.load_error = f"{type(e).__name__}: {e}"
@@ -219,7 +221,7 @@ def model_versions(pipeline: FocusRecoveryPipeline) -> dict:
         "classifier": f"{classifier.model_type}@{trained_at}",
     }
     if pipeline.context_model is not None:
-        versions["context"] = pipeline.context_model.model_name
+        versions["context"] = pipeline.context_model.config.version
     return versions
 
 

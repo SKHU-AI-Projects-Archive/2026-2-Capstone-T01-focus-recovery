@@ -7,7 +7,7 @@ from typing import Iterator, List, Optional, Sequence, Tuple
 import numpy as np
 
 from models.classifier import DriftClassifier
-from models.context import WINDOW_SIZE, ContextAnalysisResult, LocalContextModel, PageVisit
+from models.context import WINDOW_SIZE, ContextAnalysisResult, ContextModelConfig, LocalContextModel, PageVisit
 from models.embedding import LocalSemanticEmbeddingModel
 
 STRIDE = 1
@@ -68,6 +68,15 @@ class FocusRecoveryPipeline:
         classifier_path = classifier_path or os.getenv("DRIFT_CLASSIFIER_PATH") or DEFAULT_CLASSIFIER_PATH
         print("[Pipeline] AI 모델을 로드합니다...")
         classifier = DriftClassifier.load(classifier_path)
+        if classifier.use_context:
+            # Context 특징은 모델 설정에 따라 값이 달라지므로 학습 때와 같은 설정이어야 한다. (모델 로드 전에 확인)
+            trained_with = classifier.metadata.get("contextModel")
+            config = ContextModelConfig.resolve()
+            if trained_with and trained_with != config.version:
+                raise ValueError(
+                    f"[Pipeline] 분류기는 Context Model {trained_with}로 학습되었지만 현재 설정은 {config.version}입니다. "
+                    "CONTEXT_MODEL_NAME / CONTEXT_USE_4BIT를 학습 때와 맞추거나 분류기를 다시 학습하세요."
+                )
         embedding_model = LocalSemanticEmbeddingModel()
         context_model = LocalContextModel() if classifier.use_context else None
         print(
