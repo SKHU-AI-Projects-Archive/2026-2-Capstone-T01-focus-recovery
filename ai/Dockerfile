@@ -11,8 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY requirements.txt .
-# requirements.txt에 없는 API 서버 의존성(fastapi, uvicorn)을 함께 설치한다
-RUN pip install -r requirements.txt fastapi "uvicorn[standard]"
+RUN pip install -r requirements.txt
 
 COPY . .
 

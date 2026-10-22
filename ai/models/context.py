@@ -16,12 +16,52 @@ MAX_RETRIES = 1  # 구조화 출력 검증 실패 시 1회 재시도 (총 2회 �
 MAX_CONTENT_CHARS = 600  # 페이지당 프롬프트에 포함할 본문 최대 길이
 DOWNLOAD_MAX_ATTEMPTS = 5  # 네트워크 끊김 시 이어받기 재시도 횟수
 
+# 환경 변수로 바꿀 수 있는 Context Model 설정의 기본값
+DEFAULT_CONTEXT_MODEL_NAME = "Qwen/Qwen3-4B"
+# 출력은 JSON 객체 1개(약 60 토큰)이므로 생성 길이를 짧게 두어 지연을 줄인다
+DEFAULT_MAX_NEW_TOKENS = 128
+
 # contextState는 Context Model의 중간 판단이며 최종 분류(NORMAL/TRANSITION/DRIFT)와 구분한다.
 VALID_CONTEXT_STATES = ("FOCUSED", "JUSTIFIED_DETOUR", "DRIFTING")
 
 
 class ContextAnalysisError(RuntimeError):
     """Context 분석 실패. 실패를 정상 결과로 대체하지 않기 위해 예외로 전달한다."""
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("1", "true", "yes")
+
+
+@dataclass(frozen=True)
+class ContextModelConfig:
+    """
+    Context Model 설정. 인자 > 환경 변수 > 기본값 순으로 정한다.
+    - CONTEXT_MODEL_NAME: 모델 이름 (예: Qwen/Qwen3-8B)
+    - CONTEXT_USE_4BIT: 1/true이면 4-bit 양자화 (CUDA 필요, VRAM이 부족한 GPU용)
+    - CONTEXT_MAX_NEW_TOKENS: 최대 생성 토큰 수
+    """
+    model_name: str
+    use_4bit: bool
+    max_new_tokens: int
+
+    @classmethod
+    def resolve(
+        cls,
+        model_name: Optional[str] = None,
+        use_4bit: Optional[bool] = None,
+        max_new_tokens: Optional[int] = None,
+    ) -> "ContextModelConfig":
+        return cls(
+            model_name=model_name or os.getenv("CONTEXT_MODEL_NAME") or DEFAULT_CONTEXT_MODEL_NAME,
+            use_4bit=_env_flag("CONTEXT_USE_4BIT") if use_4bit is None else use_4bit,
+            max_new_tokens=max_new_tokens or int(os.getenv("CONTEXT_MAX_NEW_TOKENS", DEFAULT_MAX_NEW_TOKENS)),
+        )
+
+    @property
+    def version(self) -> str:
+        """modelVersions 및 학습 캐시 키에 쓰는 설정 식별자."""
+        return self.model_name + ("@4bit" if self.use_4bit else "")
 
 
 @dataclass
@@ -76,14 +116,15 @@ class LocalContextModel:
 
     def __init__(
         self,
-        model_name: str = "Qwen/Qwen3-4B",
+        model_name: Optional[str] = None,
         save_dir: Union[str, Path, None] = None,
-        use_4bit: bool = False,  # Qwen3-8B 4-bit 사용 시 True (CUDA + bitsandbytes 필요)
-        max_new_tokens: int = 256,
+        use_4bit: Optional[bool] = None,  # Qwen3-8B 4-bit 사용 시 True (CUDA + bitsandbytes 필요)
+        max_new_tokens: Optional[int] = None,
     ):
-        self.model_name = model_name
-        self.use_4bit = use_4bit
-        self.max_new_tokens = max_new_tokens
+        self.config = ContextModelConfig.resolve(model_name, use_4bit, max_new_tokens)
+        self.model_name = self.config.model_name
+        self.use_4bit = self.config.use_4bit
+        self.max_new_tokens = self.config.max_new_tokens
 
         if save_dir is None:
             save_dir = os.getenv("CONTEXT_MODEL_DIR")
@@ -91,7 +132,8 @@ class LocalContextModel:
             self.save_dir = Path(save_dir)
         else:
             current_dir = Path(__file__).resolve().parent
-            folder = model_name.split("/")[-1].lower() + ("-4bit" if use_4bit else "")
+            # 4-bit는 로드 시 양자화하므로 원본 가중치 폴더를 그대로 사용한다
+            folder = self.model_name.split("/")[-1].lower()
             self.save_dir = current_dir / "saved_models" / folder
 
         self.has_cuda = torch.cuda.is_available()
@@ -181,7 +223,8 @@ class LocalContextModel:
         return model
 
     # ------------------------------------------------------------------ 입력 검증 / 프롬프트
-    def _validate_input(self, goal: str, visits: List[PageVisit]) -> None:
+    @staticmethod
+    def validate_input(goal: str, visits: List[PageVisit]) -> None:
         if not goal or not goal.strip():
             raise ValueError("[AI-002] 유효한 최초 작업 목표가 필요합니다.")
         if len(visits) != WINDOW_SIZE:
@@ -194,7 +237,8 @@ class LocalContextModel:
             if not title and not content:
                 raise ValueError(f"[AI-002] P{i}의 제목과 본문이 모두 비어 있습니다.")
 
-    def _build_user_prompt(self, goal: str, visits: List[PageVisit]) -> str:
+    @staticmethod
+    def build_user_prompt(goal: str, visits: List[PageVisit]) -> str:
         lines = [f"Goal: {goal.strip()}", "", "Recent page visits (oldest -> newest):"]
         for i, v in enumerate(visits, start=1):
             content = (v.content or "").strip().replace("\n", " ")[:MAX_CONTENT_CHARS]
@@ -205,7 +249,7 @@ class LocalContextModel:
         return "\n".join(lines)
 
     # ------------------------------------------------------------------ 생성 / 파싱
-    def _generate(self, user_prompt: str) -> str:
+    def _generate(self, user_prompt: str, max_new_tokens: Optional[int] = None) -> str:
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
@@ -217,7 +261,7 @@ class LocalContextModel:
         with torch.no_grad():
             output_ids = self.model.generate(
                 **inputs,
-                max_new_tokens=self.max_new_tokens,
+                max_new_tokens=max_new_tokens or self.max_new_tokens,
                 do_sample=False,  # 재현성을 위해 greedy decoding
             )
         new_tokens = output_ids[0][inputs["input_ids"].shape[1]:]
@@ -252,14 +296,18 @@ class LocalContextModel:
         )
 
     # ------------------------------------------------------------------ 공개 API
+    def warm_up(self) -> None:
+        """첫 요청의 초기화 지연(CUDA 커널 준비 등)을 서버 시작 시점으로 옮긴다."""
+        self._generate("Goal: warm-up", max_new_tokens=4)
+
     def analyze(self, goal: str, visits: List[PageVisit]) -> ContextAnalysisResult:
         """
         최초 목표와 최근 5개 Page Visit으로 탐색 흐름을 분석한다.
         구조화 출력 검증에 실패하면 1회 재시도하며, 그래도 실패하면
         기본값으로 대체하지 않고 ContextAnalysisError를 발생시킨다.
         """
-        self._validate_input(goal, visits)
-        user_prompt = self._build_user_prompt(goal, visits)
+        self.validate_input(goal, visits)
+        user_prompt = self.build_user_prompt(goal, visits)
 
         last_error: Optional[Exception] = None
         for attempt in range(1 + MAX_RETRIES):
