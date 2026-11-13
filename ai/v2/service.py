@@ -4,6 +4,7 @@ from collections import OrderedDict
 from copy import deepcopy
 
 from v2.contracts import V2Error, check, compose, request_dto
+from v2.store import relevance_key
 
 
 def synthetic_enabled():
@@ -40,7 +41,7 @@ class RequestRegistry:
 
 
 class V2Service:
-    def __init__(self, inference_lock=None, capacity=1000, privacy_store=None):
+    def __init__(self, inference_lock=None, capacity=1000, privacy_store=None, result_store=None):
         self.model = None
         self.lock = threading.RLock()
         self.inference_lock = inference_lock or threading.Lock()
@@ -50,6 +51,8 @@ class V2Service:
         self.blocked_sessions = set()
         self.privacy_store = privacy_store
         self.privacy_revision = -1
+        # Optional durable results (v2.store.AnalysisResultStore); None keeps memory-only receipts.
+        self.result_store = result_store
 
     def load(self, legacy_state):
         if not synthetic_enabled():
@@ -79,8 +82,11 @@ class V2Service:
         with self.lock:
             revision, sessions, visits = self.privacy_store.snapshot()
             if revision != self.privacy_revision:
-                self.invalidate_visits(visits)
                 self.blocked_sessions.update(sessions)
+                self.invalidate_visits(visits)
+                if self.result_store is not None:
+                    # Raises AI_NOT_READY on failure; the revision stays stale so it is retried.
+                    self.result_store.delete_retracted(session_ids=sessions)
                 self.privacy_revision = revision
 
     def _privacy_check(self, body):
@@ -100,6 +106,14 @@ class V2Service:
             model = self.model
             if kind != "compose" and model is None:
                 raise V2Error(503, "AI_NOT_READY")
+            store = self.result_store if kind != "compose" else None
+            if store is not None:
+                stored = store.get_analysis(key)
+                if stored is not None:
+                    if stored[0] != body["inputFingerprint"]:
+                        raise V2Error(409, "ANALYSIS_ID_CONFLICT")
+                    if stored[1] == "COMPLETED":
+                        return check("AnalysisResponse", stored[2])  # Durable replay after restart.
             cached, token = registry.begin(key, body["inputFingerprint"], prefix)
             if cached is not None:
                 return cached
@@ -117,7 +131,12 @@ class V2Service:
                         self._privacy_check(body)
                         if generation != self.generation:
                             raise V2Error(409, "PRIVACY_RETRACTED")
-                    response = model.analyze(body, cache_generation)
+                    if store is None:
+                        response = model.analyze(body, cache_generation)
+                    else:
+                        embedding_model = model.embedding.model_name
+                        response = model.analyze(body, cache_generation, cached_relevance=lambda v: store.get_relevance(
+                            relevance_key(body["sessionId"], body["goalText"], v, embedding_model)))
                 finally:
                     self.inference_lock.release()
             response = check("CompositionResponse" if kind == "compose" else "AnalysisResponse", response)
@@ -134,16 +153,37 @@ class V2Service:
                 self._privacy_check(body)
                 if generation != self.generation:
                     raise V2Error(409, "PRIVACY_RETRACTED")
+                if store is not None:
+                    # Persist inside the privacy-checked section so a retraction cannot race it.
+                    store.save_completed(body, response, model.embedding.model_name)
                 token["response"], token["running"] = deepcopy(response), False
             return response
         except BaseException as exc:
             with self.lock:
                 token["running"] = False
+            if store is not None and isinstance(exc, Exception):
+                self._record_failure(store, body, exc, generation)
             if isinstance(exc, V2Error) and exc.status != 422:
                 raise
             if not isinstance(exc, Exception):
                 raise
             raise V2Error(500, "AI_COMPOSITION_FAILED" if kind == "compose" else "AI_ANALYSIS_FAILED") from None
+
+    def _record_failure(self, store, body, exc, generation):
+        """Keep UNJUDGEABLE (insufficient evidence) apart from ANALYSIS_FAILED (error/timeout).
+        Privacy, conflict, readiness and request errors are not analysis outcomes."""
+        from v2.model import Unjudgeable
+        if isinstance(exc, V2Error) and exc.code != "AI_ANALYSIS_FAILED":
+            return
+        status = "UNJUDGEABLE" if isinstance(exc, Unjudgeable) else "ANALYSIS_FAILED"
+        with self.lock:
+            try:
+                self._privacy_check(body)
+                if generation != self.generation:
+                    return
+                store.save_failure(body, status, "AI_ANALYSIS_FAILED")
+            except V2Error:
+                pass  # The original analysis error is still returned unchanged.
 
     def invalidate_visits(self, visit_ids):
         """Internal quarantine hook, NOT deletion or an authenticated BE retraction API.
@@ -159,3 +199,5 @@ class V2Service:
             self.analyses.entries.clear()
             if self.model is not None:
                 self.model.embedding.invalidate_cache()
+            if self.result_store is not None:
+                self.result_store.delete_retracted(visit_ids=visit_ids)
