@@ -19,7 +19,11 @@ if (external) {
   assert.equal(policy.policyId,'SYNTHETIC-103');
   assert.deepEqual(policy.sites,[{origin:'https://example.org',pathPrefix:'/public'}]);
 }
-const publicPages=['https://docs.python.org/3/','https://blog.python.org/','https://news.ycombinator.com/','https://books.toscrape.com/','https://docs.python.org/3/howto/','https://docs.python.org/3/tutorial/','https://docs.python.org/3/library/','https://docs.python.org/3/reference/','https://search.naver.com/search.naver?query=Python+venv+documentation','https://docs.python.org/3/faq/'];
+const localizedDocs=external && process.env.FOCUS119_LOCALIZED_DOCS==='1';
+const publicArticles=external && process.env.FOCUS121_PUBLIC_ARTICLES==='1';
+assert.ok(!(localizedDocs&&publicArticles));
+const articlePages=publicArticles?JSON.parse(await readFile(resolve('tests/fixtures/public-document-pages.json'),'utf8')):[];
+const publicPages=publicArticles ? articlePages.map(p=>p.url) : localizedDocs ? ['en','ko','es','ja','pt','zh','ru','fr','de','ko'].map((locale,index)=>`https://docs.github.com/${locale}/pages/getting-started-with-github-pages/${index===9?'creating-a-github-pages-site':'what-is-github-pages'}`) : ['https://docs.python.org/3/','https://blog.python.org/','https://news.ycombinator.com/','https://books.toscrape.com/','https://docs.python.org/3/howto/','https://docs.python.org/3/tutorial/','https://docs.python.org/3/library/','https://docs.python.org/3/reference/','https://search.naver.com/search.naver?query=Python+venv+documentation','https://docs.python.org/3/faq/'];
 const observedPages=[];
 const config=JSON.parse(await readFile(join(directory,'config.json'),'utf8'));
 if (external && process.env.FOCUS_TEST_TLS_PORT) {
@@ -91,13 +95,21 @@ try {
         let response;
         response=await page.goto(publicPages[n-1],{waitUntil:'domcontentloaded',timeout:60000});
         if(response) assert.equal(response.status(),200);
-        assert.ok(['docs.python.org','blog.python.org','news.ycombinator.com','books.toscrape.com','search.naver.com'].includes(new URL(page.url()).hostname));
-        observedPages.push({domain:new URL(page.url()).hostname,status:response?.status()??200});
+        assert.ok((publicArticles?[new URL(publicPages[n-1]).hostname]:localizedDocs?['docs.github.com']:['docs.python.org','blog.python.org','news.ycombinator.com','books.toscrape.com','search.naver.com']).includes(new URL(page.url()).hostname));
+        observedPages.push({domain:new URL(page.url()).hostname,status:response?.status()??200,...(localizedDocs?{locale:new URL(page.url()).pathname.split('/')[1]}:{})});
       } else if(n===2)await page.evaluate(()=>history.pushState({},'','/public/page?page=2'));
       else await page.goto('https://example.org/public/page?page='+n);
-      await page.bringToFront();await wait(s=>s.validVisits>=n,'visit '+n);
+      await page.bringToFront();
+      const dwellStarted=Date.now();
+      const focusedAtStart=await page.evaluate(()=>document.visibilityState==='visible' && document.hasFocus());
+      await wait(s=>s.validVisits>=n,'visit '+n);
       if(external) {
-        const title=await page.title();
+        observedPages.at(-1).measuredWaitMs=Date.now()-dwellStarted;
+        observedPages.at(-1).focusedAtStart=focusedAtStart;
+        const expectedFrame=publicArticles&&articlePages[n-1].frame?page.frame({name:articlePages[n-1].frame}):undefined;
+        if(publicArticles&&articlePages[n-1].frame)assert.ok(expectedFrame,'actual public article frame loaded');
+        const title=await (expectedFrame??page).title();
+        if(publicArticles)observedPages.at(-1).articleSource=articlePages[n-1].label;
         observedPages.at(-1).titleSha256=createHash('sha256').update([...title.replace(/[\u0000-\u001f\u007f]/g,' ').replace(/\s+/g,' ').trim()].slice(0,500).join('')).digest('hex');
       }console.log((external?'AUTOMATED EXTERNAL HTTPS ':'SYNTHETIC HTTPS ')+config.slot+' visit '+n+'/10');
       if(external && n===4) {await harness.bringToFront();await new Promise(r=>setTimeout(r,1200));await page.bringToFront();}
@@ -108,7 +120,7 @@ try {
       await page.evaluate(()=>{history.pushState({},'', '/account/private');document.body.insertAdjacentHTML('beforeend','<input type="password" hidden>');});
       await page.waitForTimeout(6500);assert.equal((await send('status')).validVisits,10,'sensitive page excluded');
     }
-    await send('stop');await wait(s=>s.lifecycle==='ENDED'&&s.endPhase==='acked','END ACK');
+    await send('stop');await wait(s=>s.lifecycle==='ENDED'&&s.endPhase==='acked'&&s.pending===0,'END ACK and drained queue');
     let progress;
     for(let n=0;n<80;n++) {progress=await send('progress');if(progress.raw.completed===1)break;await new Promise(r=>setTimeout(r,200));}
     const attempt=progress.attempts[0];
@@ -116,6 +128,6 @@ try {
     await harness.bringToFront();await harness.getByRole('button',{name:'진행 상태 새로고침',exact:true}).click();
     await harness.getByText(/원본 RAW_COLLECTED/).waitFor();
     await harness.screenshot({path:join(directory,'https-metadata-complete.png'),fullPage:true});
-    await writeFile(join(directory,'https-chrome-summary.json'),JSON.stringify({kind:external?'AUTOMATED_EXTERNAL_SITE_TECHNICAL_E2E_NOT_HUMAN_CONSENT':'SYNTHETIC_PINNED_HTTPS_NOT_OS_TRUST',actualParticipantConsent:false,observedPages,slot:config.slot,sessionId:attempt.sessionId,visits:10,raw:'RAW_COLLECTED',ai:'NOT_RUN',fileLogin:true,explicitUiConsent:true,spa:!external,sensitivePageExcluded:external,workerRestart:true,browserRestart:true,wrongPinRejected:true},null,2),{flag:'wx'});
+    await writeFile(join(directory,'https-chrome-summary.json'),JSON.stringify({kind:external?'AUTOMATED_EXTERNAL_SITE_TECHNICAL_E2E_NOT_HUMAN_CONSENT':'SYNTHETIC_PINNED_HTTPS_NOT_OS_TRUST',scenario:publicArticles?'PUBLIC_ARTICLES':localizedDocs?'LOCALIZED_PUBLIC_DOCS':'STANDARD',actualParticipantConsent:false,observedPages,slot:config.slot,sessionId:attempt.sessionId,visits:10,raw:'RAW_COLLECTED',ai:'NOT_RUN',fileLogin:true,explicitUiConsent:true,spa:!external,sensitivePageExcluded:external,workerRestart:true,browserRestart:true,wrongPinRejected:true},null,2),{flag:'wx'});
   }
 } finally {await context?.close();}

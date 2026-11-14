@@ -14,6 +14,7 @@ import type { Stamp } from './state';
 import { allowedSite, validPolicy, publicText, publicSearchQuery, type SitePolicy } from '../../real/policy';
 import { validSnapshot } from './contract';
 import type { PageSnapshot } from '../shared/types';
+import { MAX_OBSERVATION_GAP_MS } from './collector';
 declare const __COLLECTION_BUILD__: { buildId: string; policyDigest: string; sites: { origin: string; pathPrefix: string }[]; mode: string; metadataOnly?: boolean; pageContent?: boolean; maskContacts?: boolean; publicWeb?: boolean };
 
 export function installV2Browser(options: { uiPath: string; pilot: boolean; participant: boolean; real?: boolean }) {
@@ -58,6 +59,9 @@ const runtime = new V2Runtime(new V2Repository(API_BASE_URL), { ...v2HttpTranspo
 });
 const reportAttempts = new Map<string, string>();
 const reportedFailures = new Set<string>();
+// Ephemeral, fixed codes only: never retain a URL, document text, input value or credential.
+let diagnostic = { code: 'WAITING_OBSERVATION', observedAt: Date.now() };
+const diagnose = (code: string) => { diagnostic = { code, observedAt: Date.now() }; };
 async function syncReport() {
   if (!options.participant) return;
   const s = runtime.snapshot();
@@ -79,8 +83,12 @@ async function syncReport() {
 }
 function snapshot() {
   const s = runtime.snapshot();
-  if (!options.participant) return s;
+  const diagnostics = { diagnostic, collecting: runtime.collecting(),
+    localVisits: s.collectionAllowed ? s.compactedCount + s.posts.entries.length : 0,
+    activeDurationMs: s.collectionAllowed ? s.candidates.find(c => c.id === s.tabs[s.foreground ?? -1])?.behavior.activeDurationMs ?? 0 : 0 };
+  if (!options.participant) return { ...s, ...diagnostics };
   return { lifecycle: s.accessError === 'account' ? 'ACCOUNT_BLOCKED' : s.lifecycle, collectionAllowed: s.collectionAllowed, accessError: s.accessError, storageFailed: s.storageFailed,
+    ...diagnostics,
     validVisits: s.collectionAllowed ? s.compactedCount + s.posts.entries.filter(e => e.phase === 'acked').length : 0,
     pending: s.collectionAllowed ? [...s.posts.entries, ...s.behaviors.entries].filter(e => e.phase !== 'acked').length : 0,
     notificationPending: s.collectionAllowed ? s.notifications.filter(r => !r.shownAck || r.selection && !r.selectionAck).length : 0,
@@ -93,13 +101,40 @@ const statusClient = new V2StatusClient(() => runtime.snapshot());
 const serial = serialExecutor();
 async function captureAllowedTabs() {
   if (!options.pilot && !real) return;
-  const tabs = await chrome.tabs.query({});
-  await Promise.all(tabs.filter(t => t.id !== undefined && t.url && permits(t.url)).map(t => chrome.tabs.sendMessage(t.id!, { type: 'v2-capture' }).catch(() => {})));
+  const tab = await focus(stamp());
+  if (!runtime.collecting()) return;
+  if (tab?.id === undefined) { diagnose('NO_FOREGROUND_TAB'); return; }
+  if (!tab.url || !permits(tab.url)) { diagnose('POLICY'); return; }
+  if (real && !await chrome.permissions.contains({ origins: [new URL(tab.url).origin + '/*'] })) { diagnose('SITE_PERMISSION_REQUIRED'); return; }
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: 'v2-capture' });
+    diagnose('WAITING_OBSERVATION');
+  } catch { diagnose('CONTENT_SCRIPT_UNAVAILABLE'); }
 }
 const boundaries = new Map<number, Stamp>();
 const documents = new Map<number, string>();
 const navigationRevision = new Map<number, number>();
 const contentGenerations = new Map<number, { raw: string; content: string }>();
+type ContentSource = {url:string;frameId:number;documentId:string};
+const contentFrames = new Map<number, ContentSource>();
+const frameDiagnostics = new Set(['FRAME_UNAVAILABLE','FRAME_UNSUPPORTED','FRAME_AMBIGUOUS','FRAME_POLICY_BLOCKED','FRAME_SOURCE_STALE']);
+async function discardSourceGap(tabId: number, t: Stamp) {
+  const state = runtime.snapshot();
+  const current = state.candidates.find(c => c.id === state.tabs[tabId]);
+  if (!current || current.excluded) return;
+  // A newly discovered replacement has no trusted navigation timestamp for its last interval.
+  await runtime.leave(tabId, current.cursor ?? t, true);
+  boundaries.set(tabId,t);
+}
+
+async function validSource(tabId: number, topRaw: string, source: unknown): Promise<ContentSource | null> {
+  const value = source as ContentSource | null;
+  if (!value || typeof value.url !== 'string' || !Number.isSafeInteger(value.frameId) || value.frameId <= 0 || typeof value.documentId !== 'string' || !permits(value.url)) return null;
+  try { if (new URL(value.url).origin !== new URL(topRaw).origin) return null; } catch { return null; }
+  const frame = await chrome.webNavigation.getFrame({tabId,frameId:value.frameId}).catch(() => null);
+  return frame && frame.parentFrameId === 0 && frame.documentId === value.documentId && frame.url === value.url && frame.documentLifecycle === 'active' ? value : null;
+}
+
 const windowTabs = new Map<number, number>();
 let focusedWindow: number | null = null;
 let focused: number | null = null;
@@ -115,6 +150,7 @@ async function focus(t: Stamp, switched = false) {
     focused = next;
     await runtime.foreground(next, t, switched);
   }
+  return tab;
 }
 chrome.runtime.onMessage.addListener((m, sender, reply) => {
   if (sender.id !== chrome.runtime.id) return;
@@ -160,7 +196,7 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
         await focus(t);
         await captureAllowedTabs();
       }
-      if (m?.type === 'v2-retry') { await runtime.retry(); await runtime.flushNotifications(); }
+      if (m?.type === 'v2-retry') { await runtime.retry(); await runtime.flushNotifications(); await captureAllowedTabs(); }
       if (m?.type === 'v2-alert') return statusClient.candidate();
       if (m?.type === 'v2-shown') {
         const candidate = await statusClient.candidate();
@@ -177,26 +213,58 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
       await runtime.verifyAccess();
       // Chrome's sender.url can retain the document's initial URL after pushState.
       const frame = await chrome.webNavigation.getFrame({tabId,frameId:0});
-      const collecting = typeof m.raw === 'string' && frame?.documentId === sender.documentId && frame.url === m.raw && permits(m.raw) && runtime.collecting();
-      return {collecting,maskContacts:build?.maskContacts === true,pageContent:build?.pageContent === true,publicWeb:build?.publicWeb === true,metadataOnly:build?.metadataOnly === true,description:collecting && build?.metadataOnly ? await descriptionFor(m.raw) : undefined};
+      await focus(t);
+      const collecting = tabId === focused && typeof m.raw === 'string' && frame?.documentId === sender.documentId && frame.url === m.raw && permits(m.raw) && runtime.collecting();
+      let source: ContentSource | undefined;
+      if (collecting && m.contentRaw !== undefined) {
+        if (!build?.pageContent || typeof m.contentRaw !== 'string' || !permits(m.contentRaw)) return {collecting:false};
+        try { if (new URL(m.contentRaw).origin !== new URL(m.raw).origin) return {collecting:false}; } catch { return {collecting:false}; }
+        const frames = await chrome.webNavigation.getAllFrames({tabId}).catch(() => null);
+        const matches = frames?.filter(f => f.frameId > 0 && f.parentFrameId === 0 && f.url === m.contentRaw && f.documentLifecycle === 'active');
+        if (matches?.length !== 1 || !matches[0].documentId) return {collecting:false};
+        source = {url:m.contentRaw,frameId:matches[0].frameId,documentId:matches[0].documentId};
+        if (!await validSource(tabId,m.raw,source)) return {collecting:false};
+        const state = runtime.snapshot();
+        const current = state.candidates.find(c => c.id === state.tabs[tabId]);
+        const previous = contentFrames.get(tabId);
+        if (current && current.document !== sender.documentId+':'+source.documentId || previous && previous.url !== source.url) await discardSourceGap(tabId,t);
+        contentFrames.set(tabId,source);
+      }
+      await focus(t);
+      if (tabId !== focused || arrivedRevision !== navigationRevision.get(tabId)) return {collecting:false};
+      return {collecting,maskContacts:build?.maskContacts === true,pageContent:build?.pageContent === true,publicWeb:build?.publicWeb === true,metadataOnly:build?.metadataOnly === true,
+        ...(source?{source}:{}),description:collecting && build?.metadataOnly ? await descriptionFor(source?.url ?? m.raw) : undefined};
     }
     if (m?.type === 'v2-context') return { collecting: !!sender.url && permits(sender.url) && runtime.collecting() };
     if (m?.type === 'v2-leave') { await runtime.leave(tabId, t); return; }
     if (real && m?.type === 'v2-observation') {
       if (typeof m.raw !== 'string' || !runtime.collecting()) return { collecting: false };
-      if (!permits(m.raw)) { await runtime.leave(tabId,t,true); return {collecting:runtime.collecting()}; }
+      if (!permits(m.raw)) { diagnose('POLICY'); await runtime.leave(tabId,t,true); return {collecting:runtime.collecting()}; }
       // Refresh server consent/release before accepting any ordinary document content.
       await runtime.verifyAccess();
       if (!permits(m.raw)) return { collecting: false };
       const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 });
       if (!frame || frame.documentId !== sender.documentId || frame.url !== m.raw) return;
+      const source = m.source === undefined ? undefined : await validSource(tabId,m.raw,m.source);
+      if (m.source !== undefined && !source) { diagnose('FRAME_SOURCE_STALE'); return {collecting:runtime.collecting()}; }
       const permitted = await chrome.permissions.contains({origins:[new URL(m.raw).origin + '/*']});
-      if (build?.publicWeb && (!permitted || m.safe !== true && m.sensitive !== true)) { await runtime.leave(tabId,t,true); return {collecting:runtime.collecting()}; }
-      if (!permitted || m.safe !== true) { await runtime.quarantine('SENSITIVE_CONTENT', t.wall); return { collecting: false }; }
+      const description = permitted && m.safe === true ? await descriptionFor(source?.url ?? m.raw) : undefined;
+      // Recheck after asynchronous validation, before any privacy decision or accepted Visit.
       await focus(t);
+      if (tabId !== focused || m.visible === false || arrivedRevision !== navigationRevision.get(tabId) || source && !await validSource(tabId,m.raw,source)) {
+        if (tabId === focused) diagnose('NOT_FOCUSED_OR_STALE');
+        await runtime.leave(tabId, t);
+        return { collecting: runtime.collecting() };
+      }
+      if (!source && m.diagnosticCode === 'FRAME_UNAVAILABLE') { await discardSourceGap(tabId,t); diagnose('FRAME_UNAVAILABLE'); return {collecting:runtime.collecting()}; }
+      if (!source && (contentFrames.has(tabId) || frameDiagnostics.has(m.diagnosticCode))) await discardSourceGap(tabId,t);
+      if ((build?.publicWeb || build?.pageContent) && (!permitted || m.safe !== true && m.sensitive !== true)) {
+        diagnose(frameDiagnostics.has(m.diagnosticCode) ? m.diagnosticCode : !permitted ? 'SITE_PERMISSION_REQUIRED' : m.failureReason === 'INPUT_FOCUSED' ? 'INPUT_FOCUSED' : 'POLICY');
+        await runtime.leave(tabId,t,true); return {collecting:runtime.collecting()};
+      }
+      if (!permitted || m.safe !== true) { diagnose('SENSITIVE_CONTENT'); await runtime.quarantine('SENSITIVE_CONTENT', t.wall); return { collecting: false }; }
       if (!m.visible) { await runtime.leave(tabId, t); return { collecting: runtime.collecting() }; }
       if (documents.get(tabId) !== sender.documentId) { documents.set(tabId, sender.documentId);boundaries.set(tabId,t); }
-      const description = await descriptionFor(m.raw);
       if (!description) return;
       const s = m.snapshot as PageSnapshot | null;
       if (s && (!validSnapshot(s, runtime.snapshot().session!.sessionId) || s.normalizedUrl !== description.normalizedUrl || s.identity !== description.identity
@@ -211,8 +279,13 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
       if (previous && (previous.raw !== m.raw || previous.content !== generation)) boundaries.set(tabId,t);
       contentGenerations.set(tabId,{raw:m.raw,content:generation});
       if (arrivedRevision !== navigationRevision.get(tabId)) return { collecting: runtime.collecting() };
-      await runtime.observe({tabId,document:sender.documentId,target:description.identity,generation,stamp:t,enteredAt:boundaries.get(tabId) ?? t,
+      const state = runtime.snapshot();
+      const current = state.candidates.find(c => c.id === state.tabs[tabId]);
+      const gap = current?.cursor && current.cursor.epoch === t.epoch && t.mono - current.cursor.mono > MAX_OBSERVATION_GAP_MS;
+      if (!source) contentFrames.delete(tabId);
+      await runtime.observe({tabId,document:source ? sender.documentId+':'+source.documentId : sender.documentId,target:description.identity,generation,stamp:t,enteredAt:boundaries.get(tabId) ?? t,
         permitted,safe:true,snapshot:s,extractionFailed:m.extractionFailed === true,failureReason:['POLICY','EXTRACTION_NO_CONTENT','EXTRACTION_DOM_ERROR','EXTRACTION_RENDER_TIMEOUT','EXTRACTION_ACCESS_DENIED'].includes(m.failureReason) ? m.failureReason : undefined});
+      diagnose(frameDiagnostics.has(m.diagnosticCode) ? m.diagnosticCode : gap ? 'OBSERVATION_GAP' : s ? 'OBSERVING' : ['POLICY','EXTRACTION_NO_CONTENT','EXTRACTION_DOM_ERROR','EXTRACTION_RENDER_TIMEOUT','EXTRACTION_ACCESS_DENIED'].includes(m.failureReason) ? m.failureReason : 'WAITING_CONTENT');
       await syncReport();await runtime.compact(t);return { collecting:runtime.collecting() };
     }
     if (m?.type !== 'v2-observation'  || typeof m.raw !== 'string' || !fixtureId(m.raw) || fixtureId(m.raw) !== m.id) return;
@@ -257,6 +330,7 @@ chrome.tabs.onActivated.addListener(info => {
     if (info.windowId === focusedWindow) {
       boundaries.set(info.tabId, t); focused = info.tabId;
       await runtime.foreground(info.tabId, t, true);
+      await captureAllowedTabs();
     }
   });
 });
@@ -265,20 +339,25 @@ chrome.windows.onFocusChanged.addListener(windowId => {
   event(async t => {
     if (windowId === chrome.windows.WINDOW_ID_NONE) {
       focused = null; focusedWindow = null; await runtime.foreground(null, t);
-    } else if (tab !== undefined) {
-      focused = tab; focusedWindow = windowId; boundaries.set(tab, t); await runtime.foreground(tab, t);
-    } else await focus(t);
+    } else {
+      if (tab !== undefined) {
+        focused = tab; focusedWindow = windowId; boundaries.set(tab, t); await runtime.foreground(tab, t);
+      }
+      await captureAllowedTabs();
+    }
   });
 });
-chrome.windows.onBoundsChanged.addListener(() => event(t => focus(t)));
+chrome.windows.onBoundsChanged.addListener(() => event(async t => { await focus(t); }));
 chrome.tabs.onRemoved.addListener(tab => event(async t => { await runtime.leave(tab, t, true); documents.delete(tab); }));
 chrome.webNavigation.onCommitted.addListener(d => {
-  if (d.frameId !== 0) return;
+  if (d.frameId !== 0 && contentFrames.get(d.tabId)?.frameId !== d.frameId) return;
+  if (d.frameId === 0) contentFrames.delete(d.tabId);
   navigationRevision.set(d.tabId, (navigationRevision.get(d.tabId) ?? 0) + 1);
-  event(async t => { boundaries.set(d.tabId, t); documents.set(d.tabId, d.documentId); await runtime.leave(d.tabId, t, true); });
+  event(async t => { boundaries.set(d.tabId, t); if (d.frameId === 0) documents.set(d.tabId, d.documentId); await runtime.leave(d.tabId, t, true); });
 });
 const routeChanged = (d: {frameId:number;tabId:number}) => {
-  if (d.frameId !== 0) return;
+  if (d.frameId !== 0 && contentFrames.get(d.tabId)?.frameId !== d.frameId) return;
+  if (d.frameId === 0) contentFrames.delete(d.tabId);
   navigationRevision.set(d.tabId, (navigationRevision.get(d.tabId) ?? 0) + 1);
   event(async t => {
     boundaries.set(d.tabId, t); await runtime.leave(d.tabId, t, true);
