@@ -29,6 +29,7 @@ from starlette.concurrency import run_in_threadpool
 
 from v2.contracts import V2Error, strict_json, validator as contract_validator
 from v2.service import V2Service
+from v2.store import result_store_from_env
 from v2.authorization import require_service
 
 if TYPE_CHECKING:
@@ -154,7 +155,7 @@ class AnalysisRegistry:
 
 state = ModelState()
 registry = AnalysisRegistry(MAX_REMEMBERED_ANALYSES)
-v2_service = V2Service(state.inference_lock)
+v2_service = V2Service(state.inference_lock, result_store=result_store_from_env())
 
 
 def load_models():

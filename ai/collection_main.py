@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from v2.service import V2Service
+from v2.store import result_store_from_env
 from v2.deployment import approved_release
 from v2.authorization import require_service
 from v2.contracts import V2Error, strict_json
@@ -15,7 +16,7 @@ from pathlib import Path
 for env_key, filename in [('AI_V2_SERVICE_TOKEN','focus-recovery.v2.dispatch.service-token'),('AI_RETRACTION_SECRET','focus-recovery.v2.retraction.service-secret')]:
     path=Path('/run/collection-secrets') / filename
     if path.is_file(): os.environ[env_key]=path.read_text().strip()
-service = V2Service()
+service = V2Service(result_store=result_store_from_env())
 
 
 def load():

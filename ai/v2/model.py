@@ -41,6 +41,20 @@ def user_prompt(body):
         for v in body["visits"]]}, ensure_ascii=False, separators=(",", ":"))
 
 
+class Unjudgeable(V2Error):
+    """Every attempt reported INSUFFICIENT_EVIDENCE. Same wire error as any analysis failure;
+    only the stored status differs (UNJUDGEABLE vs ANALYSIS_FAILED)."""
+    def __init__(self):
+        super().__init__(500, "AI_ANALYSIS_FAILED")
+
+
+def insufficient_evidence(raw):
+    try:
+        return strict_json(raw) == {"error": "INSUFFICIENT_EVIDENCE"}
+    except (ValueError, TypeError):
+        return False
+
+
 def validate_pages(raw, visits, scores):
     data = strict_json(raw)
     if not isinstance(data, dict) or set(data) != {"pageResults"}:
@@ -83,13 +97,19 @@ class PageAnalysisModel:
         self.context._generate("Synthetic warm-up", max_new_tokens=4, system_prompt=SYSTEM_PROMPT,
                                max_time=self.timeout_seconds)
 
-    def analyze(self, body, cache_generation):
+    def analyze(self, body, cache_generation, cached_relevance=None):
+        """cached_relevance(visit) -> stored score or None; misses are embedded as before."""
         started = time.monotonic()
-        scores = [self.embedding.calculate_v2_relevance(
-            body["goalText"], v["title"], v["content"], v["searchQuery"],
-            namespace=body["sessionId"], cache_generation=cache_generation)
-            for v in body["visits"]]
+        scores = []
+        for v in body["visits"]:
+            score = cached_relevance(v) if cached_relevance is not None else None
+            if score is None:
+                score = self.embedding.calculate_v2_relevance(
+                    body["goalText"], v["title"], v["content"], v["searchQuery"],
+                    namespace=body["sessionId"], cache_generation=cache_generation)
+            scores.append(score)
         prompt = user_prompt(body)
+        attempts = insufficient = 0
         for _ in range(2):  # One regeneration only for invalid structured output.
             remaining = self.timeout_seconds - (time.monotonic() - started)
             if remaining <= 0:
@@ -98,9 +118,11 @@ class PageAnalysisModel:
                                          system_prompt=SYSTEM_PROMPT, max_time=remaining)
             if time.monotonic() - started > self.timeout_seconds:
                 break
+            attempts += 1
             try:
                 pages = validate_pages(raw, body["visits"], scores)
             except (ValueError, TypeError, V2Error):
+                insufficient += insufficient_evidence(raw)
                 continue
             return {**{k: body[k] for k in ("apiContractVersion", "analysisId", "sessionId",
                                            "windowId", "inputFingerprint")},
@@ -109,4 +131,6 @@ class PageAnalysisModel:
                                       "context": self.context.config.version,
                                       "prompt": PROMPT_VERSION, "labelGuide": LABEL_GUIDE_VERSION},
                     "analyzedAt": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")}
+        if attempts and insufficient == attempts:
+            raise Unjudgeable()
         raise V2Error(500, "AI_ANALYSIS_FAILED")
