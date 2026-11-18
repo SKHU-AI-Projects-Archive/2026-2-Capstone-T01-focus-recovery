@@ -1,0 +1,26 @@
+:root { --bg: #f7f7f8; --fg: #1d1d1f; --muted: #6b6b72; --card: #fff; --line: #d9d9de; --accent: #2457c5; --ok: #1f7a3a; --warn: #a33; }
+@media (prefers-color-scheme: dark) { :root { --bg: #17171a; --fg: #ececf0; --muted: #a0a0aa; --card: #222227; --line: #3a3a42; --accent: #7aa2ff; --ok: #6fcf8a; --warn: #ff8a8a; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 system-ui, "Malgun Gothic", sans-serif; }
+header { position: sticky; top: 0; display: flex; gap: 16px; align-items: center; justify-content: space-between; padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--line); z-index: 1; flex-wrap: wrap; }
+main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+button { font: inherit; padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg); cursor: pointer; }
+button[aria-pressed="true"], button[type="submit"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+.notice { color: var(--muted); font-size: 13px; }
+.goal { font-size: 17px; margin-bottom: 12px; }
+.tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 10px; background: var(--accent); color: #fff; vertical-align: middle; }
+.context { font-size: 13px; color: var(--muted); border-left: 3px solid var(--line); padding: 4px 10px; margin-bottom: 12px; max-height: 140px; overflow: auto; }
+.pages { display: grid; gap: 12px; }
+.page { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.page h3 { margin: 0 0 4px; font-size: 16px; }
+.meta { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.content { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow: auto; font-size: 14px; border-top: 1px solid var(--line); padding-top: 6px; }
+fieldset { border: 0; padding: 0; margin: 14px 0 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+fieldset label { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; background: var(--card); cursor: pointer; }
+fieldset input { margin-right: 4px; }
+.rationale { display: block; font-size: 13px; color: var(--muted); }
+textarea { width: 100%; font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 6px; margin-top: 4px; }
+.actions { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+#status { flex: 1; font-size: 13px; }
+.saved { color: var(--ok); }
+.error { color: var(--warn); }
