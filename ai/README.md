@@ -223,6 +223,25 @@ AI_V2_PROFILE=synthetic-test AI_V2_ENABLED=1 uvicorn main:app --port 8000
 
 `/health`는 기존 v1 준비 상태를 유지합니다. v1 classifier가 없어도 v2 로더는 독립적으로 준비를 시도하고 구성은 모델 없이 가능합니다. 위 서버 실행의 기존 모델 로더에는 다운로드 기능이 있으므로 모델 파일을 준비한 개발 환경에서 사용합니다. 이번 검증에서는 서버 모델 로더를 실행하거나 가중치를 다운로드하지 않았습니다.
 
+### v2 분석 결과 형식과 결과 DB (#116)
+
+**반환 형식(공통 Schema 그대로, 필드 추가 없음):** `pageResults[3]`에 페이지별 `label`(DIRECT/JUSTIFIED_DETOUR/UNRELATED), Embedding `semanticRelevance`(-1~1), Context 모델 `rationale`(판단 근거)을 담고 `modelVersions`·`analyzedAt`을 함께 반환합니다. 최종 탐색 상태(NORMAL/TRANSITION/DRIFT)와 알림 여부는 BE가 `FinalStateRules`로 결정합니다. Embedding은 의미적 관련성, Context는 합리적 우회 여부를 판단하는 역할 분리를 유지합니다.
+
+**결과 DB:** `AI_V2_RESULT_DB=<파일 경로>`를 지정하면 SQLite(권한 0600)에 분석 결과를 저장합니다. 지정하지 않으면 기존처럼 메모리에만 보관합니다. DB 파일은 Git·클라우드 동기화 폴더에 두지 않습니다.
+
+| 테이블 | 내용 |
+| --- | --- |
+| `window_analysis` | analysisId별 상태(`COMPLETED`/`UNJUDGEABLE`/`ANALYSIS_FAILED`), inputFingerprint, 완료 응답 |
+| `page_result` | Window의 3개 페이지(visitId, label, semanticRelevance, rationale). 실패 시 visitId만 기록 |
+| `page_relevance` | 같은 세션·visit·목표·본문·Embedding 모델이면 재사용하는 관련성 점수 |
+
+- 같은 analysisId·같은 fingerprint는 재시작 후에도 추론 없이 저장된 응답을 반환하고, 다른 fingerprint는 `ANALYSIS_ID_CONFLICT`입니다. 실패 기록은 재요청을 막지 않으며 완료 기록은 실패로 덮어쓰지 않습니다.
+- 겹치는 Window의 페이지는 저장된 Embedding 점수를 재사용합니다. 목표나 본문이 바뀌면 다시 계산합니다.
+- `UNJUDGEABLE`은 모든 생성 시도가 `INSUFFICIENT_EVIDENCE`인 경우, `ANALYSIS_FAILED`는 형식 오류·추론 예외·대기 timeout입니다. BE 호환을 위해 응답 코드는 둘 다 기존 `AI_ANALYSIS_FAILED`입니다.
+- 목표·제목·본문·검색어 원문은 저장하지 않고 SHA-256 해시만 키로 사용합니다.
+- visit/session 철회(격리) 시 관련 행을 모두 삭제하고 이후 요청은 `PRIVACY_RETRACTED`입니다. DB 오류는 저장·삭제를 건너뛰지 않고 `AI_NOT_READY`로 실패합니다.
+- 스키마 버전은 `PRAGMA user_version`으로 관리하며, 코드보다 새 버전의 DB는 열지 않습니다.
+
 `V2Service.invalidate_visits`는 내부 캐시 격리 hook이며 공개 회수 API가 아닙니다. 프로세스별 메모리 tombstone/Registry는 재시작 시 사라집니다. BE 영속 격리·모든 프로세스 전파·학습 캐시/외부 사본 회수·실제 삭제는 후속입니다. 상세 결과와 미검증 범위는 [AI v2 검증 보고](../docs/ai-v2-window-analysis-validation.md)를 참조하세요.
 
 ## 실제 원본 수집 Import → 학습 검수
