@@ -23,7 +23,7 @@ def test_lossless_ordered_unlabelled_v2_review():
     assert len({r['split'] for r in review_records(t)})==1
 
 
-@pytest.mark.parametrize('field,value',[('title','reporter@example.org'),('title','Bearer synthetic-only'),('content','METADATA_ONLY: x'),('extractionStatus','EXTRACTION_FAILED'),('content','a'*5001),('searchQuery','[NOT_COLLECTED]')])
+@pytest.mark.parametrize('field,value',[('title','Bearer synthetic-only'),('content','METADATA_ONLY: x'),('extractionStatus','EXTRACTION_FAILED'),('content','a'*5001),('searchQuery','[NOT_COLLECTED]')])
 def test_metadata_or_failed_text_is_never_training_success(field,value):
     t=tables();t['visits'][0][field]=value
     with pytest.raises(ValueError):review_records(t)
@@ -35,17 +35,32 @@ def test_public_card_explanation_is_not_a_disclosed_value():
     validate_visit_privacy(v)
 
 
-@pytest.mark.parametrize('value', ['4111111111111111', '4111-1111-1111-1111',
-    '４１１１１１１１１１１１１１１１', 'credit card: 4111111111111112', 'PAN: 4111111111111112'])
-def test_payment_values_are_blocked(value):
-    v=tables()['visits'][0];v['content']=value
-    with pytest.raises(ValueError, match='Sensitive text'):validate_visit_privacy(v)
+@pytest.mark.parametrize('field,value', [('content', 'Reporter reporter@example.org, desk 02-1234-5678'),
+    ('content', 'Call 010-0000-0000 for the public office'), ('content', '4111 1111 1111 1111'),
+    ('content', '900101-1234567'), ('title', 'patient diagnosis guide'),
+    ('searchQuery', 'cancer treatment'), ('searchQuery', '대출 금리')])
+def test_v7_public_contacts_and_terms_are_kept(field, value):
+    # TEAM_POLICY v7 / CONSENTED_RAW does not quarantine public contacts, ID-shaped strings or terms.
+    v=tables()['visits'][0];v[field]=value
+    if field=='searchQuery':v.update(isSearchResultPage=True)
+    validate_visit_privacy(v)
 
 
-@pytest.mark.parametrize('case', json.loads((Path(__file__).resolve().parents[2]/'docs/contracts/v2/fixtures/privacy-text.json').read_text()), ids=lambda c:c['id'])
-def test_fe_be_ai_privacy_parity(case):
+@pytest.mark.parametrize('value', ['password=synthetic-only', 'Bearer synthetic-only', 'api_key: synthetic-only',
+    'access_token=synthetic-only', 'cookie=synthetic-only', 'session_id = synthetic', 'secret:"synthetic"', '비밀번호: synthetic'])
+def test_credential_values_are_blocked(value):
+    v=tables()['visits'][0];v['content']='Public page '+value
+    with pytest.raises(ValueError, match='Credential text'):validate_visit_privacy(v)
+
+
+CREDENTIAL_CASES={'password','bearer','api-key','access-token','cookie'}
+
+
+@pytest.mark.parametrize('case', json.loads((Path(__file__).resolve().parents[2]/'docs/contracts/v2/fixtures/privacy-text.json').read_text(encoding='utf-8')), ids=lambda c:c['id'])
+def test_fe_raw_credential_parity(case):
+    # The shared fixture's `public` flag is the v6 publicText contract; raw review follows FE credentialText.
     v=tables()['visits'][0];v['content']=case['text']
-    if case['public']:
-        validate_visit_privacy(v)
+    if case['id'] in CREDENTIAL_CASES:
+        with pytest.raises(ValueError, match='Credential text'):validate_visit_privacy(v)
     else:
-        with pytest.raises(ValueError, match='Sensitive text'):validate_visit_privacy(v)
+        validate_visit_privacy(v)

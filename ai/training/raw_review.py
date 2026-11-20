@@ -31,11 +31,19 @@ def sensitive_text(text):
     return False
 
 
+# TEAM_POLICY v7 / CONSENTED_RAW (Issue #124): public titles, bodies and search queries keep their
+# emails, phone numbers, ID-shaped strings and sensitive terms. Only credential-shaped text is
+# excluded, matching fe/src/shared/privacy.ts credentialText().
+credential=re.compile(r'(?:bearer\s+[a-z0-9._-]+|(?:password|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|session[_ -]?(?:id|token|key|credential)|cookie|passwd|secret|비밀번호)\s*["\']?\s*[:=]\s*\S+)',re.I)
+
+
+def credential_text(text):
+    return bool(credential.search(text))
+
+
 def validate_visit_privacy(visit):
-    if any(sensitive_text(visit[field] or '') for field in ('title', 'content', 'searchQuery')):
-        raise ValueError('Sensitive text requires quarantine')
-    if visit['searchQuery'] and sensitive_query.search(visit['searchQuery']):
-        raise ValueError('Sensitive search requires quarantine')
+    if any(credential_text(visit[field] or '') for field in ('title', 'content', 'searchQuery')):
+        raise ValueError('Credential text requires quarantine')
 
 
 def review_records(tables):

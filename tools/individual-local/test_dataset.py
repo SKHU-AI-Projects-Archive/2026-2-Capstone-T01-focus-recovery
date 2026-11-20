@@ -44,11 +44,13 @@ class DatasetTest(unittest.TestCase):
         self.assertEqual(d.verify_artifact(self.root/'merged.tar',synthetic=True)[1]['rawCompleted'],3)
         self.assertEqual(r['status'],'PARTIAL');self.assertEqual(r['participants'],dict(A=1,B=1,C=1))
         self.assertEqual(self.merge(name='duplicate.tar')['duplicateImports'],3)
-    def test_import_rejects_unmasked_contact(self):
+    def test_import_keeps_public_contact_and_rejects_credential(self):
         sample = copy.deepcopy(self.samples[0])
-        sample['files']['visits'][0]['title'] = 'Synthetic reporter@example.org'
-        with self.assertRaisesRegex(ValueError, 'Sensitive text'):
-            self.merge([self.save(sample, 'contact.tar')], self.privacy[:1])
+        sample['files']['visits'][0]['title'] = 'Synthetic reporter@example.org 02-1234-5678'
+        self.assertEqual(self.merge([self.save(sample, 'contact.tar')], self.privacy[:1], 'contact-merged.tar')['rawCompleted'], 1)
+        sample['files']['visits'][0]['title'] = 'Synthetic api_key=synthetic-only'
+        with self.assertRaisesRegex(ValueError, 'Credential text'):
+            self.merge([self.save(sample, 'credential.tar')], self.privacy[:1])
         self.assertFalse((self.root/'merged.tar').exists())
 
     def test_partial(self):
@@ -209,9 +211,9 @@ class TrainingReviewTest(unittest.TestCase):
         report=d.training_review(mixed,d.digest(mixed.read_bytes()),self.privacy,self.root/'mixed-review.age',key,recipient)
         self.assertEqual((report['sessions'],report['legacyMetadataSessionsExcluded']),(2,1))
         sensitive=copy.deepcopy(self.samples[0])
-        sensitive['files']['visits'][0].update(isSearchResultPage=True,searchQuery='cancer treatment',normalizedUrl='https://www.google.com/search',domain='www.google.com')
+        sensitive['files']['visits'][0].update(isSearchResultPage=True,searchQuery='access_token=synthetic-only',normalizedUrl='https://www.google.com/search',domain='www.google.com')
         bad=self.save(sensitive,'sensitive-search.tar');badmerged=self.root/'sensitive-search.age'
-        with self.assertRaisesRegex(ValueError,'Sensitive search'):
+        with self.assertRaisesRegex(ValueError,'Credential text'):
             d.merge([bad,*self.paths[1:]],self.privacy,self.root/'sensitive.sqlite',badmerged,recipient=recipient,synthetic=True)
         self.assertFalse(badmerged.exists())
         for p in self.privacy:p['withdrawn']=True;p['validConsentId']=None

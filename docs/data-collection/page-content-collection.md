@@ -106,4 +106,6 @@ privacy의 확인된 SHA 변수는 merge-guide §8에서 준비한다. 15분이 
 
 windows는 현재 v2의 실제 방문 순서로3개/stride1을 구성하며 sparse sequence를 허용한다. 이는 모델을 호출하거나 DB Window를 생성하는 작업이 아니다. label=null, labels=null, labelStatus=UNLABELLED, privacyReview=REQUIRED다. 계획된 scenarioType을 정답으로 복사하지 않는다. goalId SHA 기반 train/validation/test(8:1:1 bucket)로 나눠 같은 목표의 반복 세션이 다른 split에 들어가지 않게 한다. 부분 데이터에서는 어떤 split이 비어 있을 수 있다. 기존 legacy5개 라벨 학습 loader/AI 알고리즘은 변경하지 않는다. 새 loader/validator는 ai/training/raw_review.py다. 실제 모델 학습·사람의 개인정보 검수·정답 라벨링은 별도 단계다.
 
+Import와 학습 검수의 본문 검사(`ai/training/raw_review.py`)도 v7 기준을 따른다. 공개 제목·본문·검색어의 이메일·전화번호·개인정보 형태 문자열·민감 표현은 거절 사유가 아니며, 확장의 `credentialText`와 같은 Credential 형식 텍스트만 거절한다.
+
 검수 산출물 생성 시에도 최신 privacy를 다시 검사한다. 철회/격리/동의 불일치/tombstone 세션은 제외한다. 생성 이후 철회가 발생하면 기존 Export/백업/파생 데이터 회수 절차에 이 산출물도 포함하고 새 privacy로 재생성한다.
