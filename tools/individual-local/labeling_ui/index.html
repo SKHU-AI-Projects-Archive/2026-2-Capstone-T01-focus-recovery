@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Focus 라벨링</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header>
+  <div><strong>Focus 라벨링</strong> <span id="who"></span></div>
+  <nav>
+    <button id="tab-page" class="tab" type="button">페이지 관련성</button>
+    <button id="tab-window" class="tab" type="button">Window 상태</button>
+  </nav>
+  <div id="progress"></div>
+</header>
+<main>
+  <p id="notice" class="notice">시나리오·AI·BE 결과는 표시되지 않습니다. 페이지 내용과 흐름만 보고 판단하세요. 기준: docs/data-collection/labeling-guide.md</p>
+  <section id="task" hidden>
+    <div class="goal"><span class="tag">최초 목표</span> <span id="goal"></span></div>
+    <div id="context"></div>
+    <div id="pages"></div>
+    <form id="form">
+      <fieldset id="labels"></fieldset>
+      <label class="rationale">판단 근거 (1~500자, 원문 복사·URL·연락처 금지)
+        <textarea id="rationale" maxlength="500" rows="3" required></textarea>
+      </label>
+      <div class="actions">
+        <button type="button" id="prev">◀ 이전</button>
+        <span id="status" role="status"></span>
+        <button type="submit" id="save">저장하고 다음 ▶ (Ctrl+Enter)</button>
+        <button type="button" id="next">다음 ▶</button>
+        <button type="button" id="skip">미완료로 이동</button>
+      </div>
+    </form>
+  </section>
+  <p id="empty" hidden>이 탭에 라벨링할 항목이 없습니다.</p>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
